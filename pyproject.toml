@@ -30,6 +30,9 @@ dependencies = [
     "python-dotenv>=1.0",
     "pymupdf>=1.24",
     "tiktoken>=0.8",
+    "faiss-cpu>=1.9",
+    "numpy>=1.26",
+    "pyarrow>=17",
 ]
 
 [project.optional-dependencies]
@@ -64,12 +67,17 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 "tests/**" = ["SIM117"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
-files = ["src/agentic_rag/providers", "src/agentic_rag/config.py"]
+files = [
+    "src/agentic_rag/providers",
+    "src/agentic_rag/retrieval",
+    "src/agentic_rag/evals",
+    "src/agentic_rag/config.py",
+]
 
 [[tool.mypy.overrides]]
-module = ["fitz", "fitz.*"]
+module = ["fitz", "fitz.*", "faiss", "faiss.*", "pyarrow", "pyarrow.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
