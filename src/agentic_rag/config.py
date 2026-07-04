@@ -48,6 +48,14 @@ class ChunkingSettings(BaseModel):
     overlap_tokens: int = 64
 
 
+class RetrievalSettings(BaseModel):
+    """``candidate_pool`` is the per-mode depth fed into RRF before the final cut."""
+
+    top_k: int = 10
+    candidate_pool: int = 50
+    rrf_k: int = 60
+
+
 class RetrySettings(BaseModel):
     max_attempts: int = 5
     initial_backoff_s: float = 1.0
@@ -69,6 +77,7 @@ class Settings(BaseSettings):
     ollama: OllamaSettings = OllamaSettings()
     embedding: EmbeddingSettings = EmbeddingSettings()
     chunking: ChunkingSettings = ChunkingSettings()
+    retrieval: RetrievalSettings = RetrievalSettings()
     retry: RetrySettings = RetrySettings()
     data_dir: Path = Path("data")
 
