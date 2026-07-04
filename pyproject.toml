@@ -73,6 +73,9 @@ files = [
     "src/agentic_rag/providers",
     "src/agentic_rag/retrieval",
     "src/agentic_rag/evals",
+    "src/agentic_rag/rerank",
+    "src/agentic_rag/pipeline",
+    "src/agentic_rag/prompts",
     "src/agentic_rag/config.py",
 ]
 

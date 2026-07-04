@@ -56,6 +56,20 @@ class RetrievalSettings(BaseModel):
     rrf_k: int = 60
 
 
+class RerankSettings(BaseModel):
+    """``mode``: none | llm | cross-encoder. ``model`` overrides the backend default."""
+
+    mode: str = "none"
+    candidate_pool: int = 30
+    top_k: int = 8
+    model: str | None = None
+
+
+class SynthesisSettings(BaseModel):
+    max_context_tokens: int = 6000
+    max_answer_tokens: int = 1024
+
+
 class RetrySettings(BaseModel):
     max_attempts: int = 5
     initial_backoff_s: float = 1.0
@@ -78,6 +92,8 @@ class Settings(BaseSettings):
     embedding: EmbeddingSettings = EmbeddingSettings()
     chunking: ChunkingSettings = ChunkingSettings()
     retrieval: RetrievalSettings = RetrievalSettings()
+    rerank: RerankSettings = RerankSettings()
+    synthesis: SynthesisSettings = SynthesisSettings()
     retry: RetrySettings = RetrySettings()
     data_dir: Path = Path("data")
 
