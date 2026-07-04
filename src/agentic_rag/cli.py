@@ -69,6 +69,133 @@ def _usage_line(model: str, u: agentic_rag.providers.Usage) -> str:
 
 
 @app.command()
+def index(
+    force: bool = typer.Option(False, "--force", help="Re-embed and rebuild everything."),
+) -> None:
+    """Build the BM25 and dense indexes from the chunked corpus."""
+    from agentic_rag.config import get_settings
+    from agentic_rag.providers.registry import get_embedding_provider
+    from agentic_rag.retrieval.base import load_chunks
+    from agentic_rag.retrieval.bm25 import BM25Index
+    from agentic_rag.retrieval.dense import DenseIndex
+    from agentic_rag.retrieval.embed import embed_corpus
+
+    settings = get_settings()
+    index_dir = settings.data_dir / "index"
+    chunks = load_chunks(settings.data_dir / "corpus" / "chunks.jsonl")
+
+    bm25 = BM25Index.build(chunks, index_dir / "bm25.db")
+    typer.echo(f"BM25 index: {bm25.size} chunks -> {index_dir / 'bm25.db'}")
+    bm25.close()
+
+    embedder = get_embedding_provider(settings.embedding.provider, settings)
+
+    async def _embed() -> None:
+        matrix = await embed_corpus(
+            chunks,
+            embedder,
+            model=settings.embedding.model,
+            checkpoint_path=index_dir / "embeddings.checkpoint.jsonl",
+            force=force,
+        )
+        dense = DenseIndex.build(matrix, chunks, index_dir)
+        typer.echo(
+            f"Dense index: {dense.size} chunks, {dense.manifest.dimensions} dims "
+            f"({dense.manifest.model}) -> {index_dir}"
+        )
+
+    asyncio.run(_embed())
+
+
+@app.command()
+def search(
+    query: str = typer.Argument(..., help="Search query."),
+    mode: str = typer.Option("hybrid", help="Retrieval mode: bm25|dense|hybrid."),
+    top_k: int = typer.Option(None, "--top-k", help="Number of results."),
+) -> None:
+    """Search the indexed corpus and print ranked chunks."""
+    from agentic_rag.config import get_settings
+    from agentic_rag.providers.registry import get_embedding_provider
+    from agentic_rag.retrieval.base import RetrievalMode
+    from agentic_rag.retrieval.retriever import Retriever
+
+    settings = get_settings()
+    retriever = Retriever.load(
+        settings.data_dir / "index",
+        get_embedding_provider(settings.embedding.provider, settings),
+        rrf_k=settings.retrieval.rrf_k,
+        candidate_pool=settings.retrieval.candidate_pool,
+    )
+    k = top_k if top_k is not None else settings.retrieval.top_k
+
+    async def _run() -> None:
+        results = await retriever.retrieve(query, mode=RetrievalMode(mode), top_k=k)
+        for r in results:
+            typer.echo(
+                f"{r.rank:>2}. [{r.score:.4f}] {r.chunk.doc_id}:{r.chunk.section_id} "
+                f"(p.{r.chunk.page_start}) {r.chunk.heading[:60]}"
+            )
+            typer.secho(f"    {r.chunk.text[:160]}", fg="bright_black")
+
+    asyncio.run(_run())
+
+
+eval_app = typer.Typer(help="Evaluation harnesses.", no_args_is_help=True)
+app.add_typer(eval_app, name="eval")
+
+
+@eval_app.command("retrieval")
+def eval_retrieval(
+    dataset: str = typer.Option("evals/golden/v1.jsonl", help="Golden dataset JSONL path."),
+) -> None:
+    """Run the retrieval-only eval over the golden dataset."""
+    import json
+    from pathlib import Path
+
+    from agentic_rag.config import get_settings
+    from agentic_rag.evals.retrieval import (
+        load_golden,
+        report_markdown,
+        run_eval,
+        write_results,
+    )
+    from agentic_rag.providers.registry import get_embedding_provider
+    from agentic_rag.retrieval.retriever import Retriever
+
+    settings = get_settings()
+    index_dir = settings.data_dir / "index"
+    retriever = Retriever.load(
+        index_dir,
+        get_embedding_provider(settings.embedding.provider, settings),
+        rrf_k=settings.retrieval.rrf_k,
+        candidate_pool=settings.retrieval.candidate_pool,
+    )
+    golden = load_golden(Path(dataset))
+    manifest = json.loads((index_dir / "manifest.json").read_text())
+
+    async def _run() -> None:
+        report = await run_eval(
+            retriever,
+            golden,
+            modes=["bm25", "dense", "hybrid"],
+            config={
+                "dataset": dataset,
+                "n_questions": len(golden),
+                "corpus_fingerprint": manifest["fingerprint"],
+                "embedding_model": manifest["model"],
+                "rrf_k": settings.retrieval.rrf_k,
+                "candidate_pool": settings.retrieval.candidate_pool,
+                "top_k": 20,
+            },
+        )
+        typer.echo(report_markdown(report))
+        path = write_results(report, Path("evals/results"))
+        typer.echo(f"Results written to {path}")
+
+    asyncio.run(_run())
+
+
+@app.command()
 def ingest(
     doc: list[str] = typer.Option(  # noqa: B008
         None, "--doc", help="Restrict to specific doc ids (default: full corpus)."
