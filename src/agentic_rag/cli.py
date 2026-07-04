@@ -69,6 +69,134 @@ def _usage_line(model: str, u: agentic_rag.providers.Usage) -> str:
 
 
 @app.command()
+def ask(
+    question: str = typer.Argument(..., help="Question to answer from the indexed corpus."),
+    provider: str | None = typer.Option(None, help="Provider: anthropic|openai|google|ollama."),
+    mode: str = typer.Option("hybrid", help="Retrieval mode: bm25|dense|hybrid."),
+    rerank: str | None = typer.Option(
+        None, help="Rerank stage: none|llm|cross-encoder (default: config)."
+    ),
+    stream: bool = typer.Option(False, "--stream", help="Stream tokens as they arrive."),
+    json_out: bool = typer.Option(False, "--json", help="Emit a JSON record for scripting."),
+) -> None:
+    """Answer a question from the corpus with inline citations."""
+    import json
+
+    from agentic_rag.config import get_settings
+    from agentic_rag.pipeline.base import Answer
+    from agentic_rag.pipeline.pipeline import RAGPipeline
+    from agentic_rag.providers.registry import get_embedding_provider, get_llm_provider
+    from agentic_rag.rerank.base import NoopReranker, Reranker
+    from agentic_rag.retrieval.base import RetrievalMode
+    from agentic_rag.retrieval.retriever import Retriever
+
+    if stream and json_out:
+        raise typer.BadParameter("--stream and --json are mutually exclusive.")
+
+    settings = get_settings()
+    llm = get_llm_provider(provider or settings.provider, settings)
+
+    rerank_mode = rerank if rerank is not None else settings.rerank.mode
+    reranker: Reranker
+    if rerank_mode == "none":
+        reranker = NoopReranker()
+    elif rerank_mode == "llm":
+        from agentic_rag.rerank.llm import LLMReranker
+
+        reranker = LLMReranker(llm, model=settings.rerank.model)
+    elif rerank_mode == "cross-encoder":
+        from agentic_rag.rerank.cross_encoder import CrossEncoderReranker
+
+        reranker = CrossEncoderReranker(model=settings.rerank.model)
+    else:
+        raise typer.BadParameter(
+            f"Unknown rerank mode: {rerank_mode}. Valid options: none|llm|cross-encoder."
+        )
+
+    retriever = Retriever.load(
+        settings.data_dir / "index",
+        get_embedding_provider(settings.embedding.provider, settings),
+        rrf_k=settings.retrieval.rrf_k,
+        candidate_pool=settings.retrieval.candidate_pool,
+    )
+    pipeline = RAGPipeline(retriever, reranker, llm, settings)
+    retrieval_mode = RetrievalMode(mode)
+
+    def _record(answer: Answer) -> dict[str, object]:
+        return {
+            "question": question,
+            "provider": llm.name,
+            "mode": retrieval_mode.value,
+            "rerank": reranker.name,
+            "answer": answer.text,
+            "refusal": answer.refusal,
+            "citations": [
+                {
+                    "marker": c.marker,
+                    "chunk_id": c.chunk.chunk_id,
+                    "doc_id": c.chunk.doc_id,
+                    "section_id": c.chunk.section_id,
+                    "heading": c.chunk.heading,
+                    "page_start": c.chunk.page_start,
+                }
+                for c in answer.citations
+            ],
+            "invalid_citations": answer.invalid_citations,
+            "usage": {
+                "input_tokens": answer.usage.input_tokens,
+                "output_tokens": answer.usage.output_tokens,
+                "cost_usd": answer.usage.cost_usd,
+            },
+            "timings": {t.stage: t.seconds for t in answer.timings},
+        }
+
+    def _footer(answer: Answer) -> None:
+        if answer.citations:
+            typer.echo()
+            for c in answer.citations:
+                typer.echo(
+                    f"[{c.marker}] {c.chunk.doc_id} §{c.chunk.section_id} (p.{c.chunk.page_start})"
+                )
+        if answer.invalid_citations:
+            typer.secho(
+                f"warning: stripped invalid citation markers {answer.invalid_citations}",
+                fg="yellow",
+                err=True,
+            )
+        timings = " | ".join(f"{t.stage} {t.seconds:.2f}s" for t in answer.timings)
+        typer.secho(f"[{timings}]", fg="bright_black", err=True)
+        typer.secho(_usage_line(llm.name, answer.usage), fg="bright_black", err=True)
+
+    async def _run() -> None:
+        if stream:
+            final: Answer | None = None
+            async for event in pipeline.ask_stream(question, mode=retrieval_mode):
+                if event.answer is not None:
+                    final = event.answer
+                else:
+                    typer.echo(event.delta, nl=False)
+            typer.echo()
+            if final is None:
+                return
+            if final.refusal:
+                typer.secho("Not found in corpus.", fg="yellow")
+            _footer(final)
+        else:
+            answer = await pipeline.ask(question, mode=retrieval_mode)
+            if json_out:
+                typer.echo(json.dumps(_record(answer), indent=2))
+                return
+            if answer.refusal:
+                msg = "Not found in corpus." + (f" {answer.text}" if answer.text else "")
+                typer.secho(msg, fg="yellow")
+            else:
+                typer.echo(answer.text)
+            _footer(answer)
+
+    asyncio.run(_run())
+
+
+@app.command()
 def index(
     force: bool = typer.Option(False, "--force", help="Re-embed and rebuild everything."),
 ) -> None:
