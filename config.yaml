@@ -1,0 +1,23 @@
+# Runtime configuration. Environment variables (AGENTIC_RAG_*) override these
+# values; API keys live in .env, never here.
+provider: ollama
+
+anthropic:
+  model: claude-sonnet-5
+openai:
+  model: gpt-5.4
+google:
+  model: gemini-3.5-flash
+ollama:
+  model: llama3.1:8b
+  host: http://localhost:11434
+
+embedding:
+  provider: ollama
+  model: nomic-embed-text
+
+chunking:
+  target_tokens: 512
+  overlap_tokens: 64
+
+data_dir: data
