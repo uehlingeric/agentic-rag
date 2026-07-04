@@ -45,6 +45,9 @@ dev = [
     "respx>=0.21",
     "types-pyyaml",
 ]
+rerank-local = [
+    "sentence-transformers>=3.0",
+]
 
 [project.scripts]
 agentic-rag = "agentic_rag.cli:app"
@@ -80,7 +83,16 @@ files = [
 ]
 
 [[tool.mypy.overrides]]
-module = ["fitz", "fitz.*", "faiss", "faiss.*", "pyarrow", "pyarrow.*"]
+module = [
+    "fitz",
+    "fitz.*",
+    "faiss",
+    "faiss.*",
+    "pyarrow",
+    "pyarrow.*",
+    "sentence_transformers",
+    "sentence_transformers.*",
+]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
