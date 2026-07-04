@@ -1,0 +1,84 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agentic-rag"
+version = "0.1.0.dev0"
+description = "Provider-agnostic agentic RAG reference system with hybrid retrieval, guardrails, and published evals"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Eric Uehling" }]
+requires-python = ">=3.11"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "typer>=0.12",
+    "pydantic>=2.7",
+    "pydantic-settings[yaml]>=2.3",
+    "httpx>=0.27",
+    "anthropic>=0.40",
+    "openai>=1.50",
+    "google-genai>=1.0",
+    "tenacity>=9.0",
+    "python-dotenv>=1.0",
+    "pymupdf>=1.24",
+    "tiktoken>=0.8",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "respx>=0.21",
+    "types-pyyaml",
+]
+
+[project.scripts]
+agentic-rag = "agentic_rag.cli:app"
+
+[project.urls]
+Repository = "https://github.com/uehlingeric/agentic-rag"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agentic_rag"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["SIM117"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src/agentic_rag/providers", "src/agentic_rag/config.py"]
+
+[[tool.mypy.overrides]]
+module = ["fitz", "fitz.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-m 'not live' --strict-markers"
+markers = [
+    "live: tests that call real provider APIs (require keys/services; excluded by default)",
+]
+
+[tool.coverage.run]
+source = ["src/agentic_rag"]
