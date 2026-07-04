@@ -52,6 +52,26 @@ flowchart LR
 - [ ] Guardrail test suite passing; audit log documented
 - [ ] Mermaid architecture diagram + demo recording in README
 
+## Development Setup
+
+Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/). For the zero-cost local
+path, install [Ollama](https://ollama.com) and pull the default models:
+`ollama pull llama3.1:8b && ollama pull nomic-embed-text`.
+
+```bash
+git clone https://github.com/uehlingeric/agentic-rag.git
+cd agentic-rag
+make install          # uv venv + editable install with dev extras
+make test             # unit tests (no network, no API keys)
+make lint             # ruff + mypy
+
+cp .env.example .env  # optional: add API keys for cloud providers
+uv run agentic-rag ingest                    # download + chunk the NIST corpus
+uv run agentic-rag chat "hello" --provider ollama
+```
+
+Live provider smoke tests (require keys / a running Ollama): `make test-live`.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
