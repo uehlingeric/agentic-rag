@@ -5,9 +5,9 @@ provider: ollama
 anthropic:
   model: claude-sonnet-5
 openai:
-  model: gpt-5.1
+  model: gpt-5.4
 google:
-  model: gemini-3-flash-preview
+  model: gemini-3.5-flash
 ollama:
   model: llama3.1:8b
   host: http://localhost:11434
