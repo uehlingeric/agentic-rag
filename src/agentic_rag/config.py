@@ -26,11 +26,11 @@ class AnthropicSettings(BaseModel):
 
 
 class OpenAISettings(BaseModel):
-    model: str = "gpt-5.1"
+    model: str = "gpt-5.4"
 
 
 class GoogleSettings(BaseModel):
-    model: str = "gemini-3-flash-preview"
+    model: str = "gemini-3.5-flash"
 
 
 class OllamaSettings(BaseModel):
