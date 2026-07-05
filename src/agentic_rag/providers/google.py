@@ -26,7 +26,7 @@ from agentic_rag.tokens import count_tokens
 
 
 class GoogleProvider:
-    """Gemini LLM provider via Google AI API."""
+    """Gemini LLM provider via the Google AI API or Vertex AI."""
 
     name = "google"
 
@@ -35,9 +35,21 @@ class GoogleProvider:
         self._client: google.genai.Client | None = None
 
     def _get_client(self) -> google.genai.Client:
-        """Lazy-initialize the Google AI client."""
+        """Lazy-initialize the client for the configured backend."""
         if self._client is None:
-            self._client = google.genai.Client()
+            cfg = self.settings.google
+            if cfg.backend == "api":
+                self._client = google.genai.Client()
+            elif cfg.backend == "vertex":
+                self._client = google.genai.Client(
+                    vertexai=True,
+                    project=cfg.vertex_project,
+                    location=cfg.vertex_location,
+                )
+            else:
+                raise ValueError(
+                    f"Unknown google backend: {cfg.backend}. Valid options: api, vertex"
+                )
         return self._client
 
     async def complete(
