@@ -17,7 +17,7 @@ def test_backend_defaults() -> None:
     assert s.anthropic.aws_region == "us-east-1"
     assert s.google.backend == "api"
     assert s.google.vertex_project is None
-    assert s.google.vertex_location == "us-central1"
+    assert s.google.vertex_location == "global"
 
 
 def test_env_override(monkeypatch) -> None:

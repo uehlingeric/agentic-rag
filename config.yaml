@@ -13,7 +13,7 @@ google:
   model: gemini-3.5-flash
   # backend: vertex  # route via Vertex AI; auth = Application Default Credentials
   # vertex_project: my-gcp-project
-  # vertex_location: us-central1
+  # vertex_location: global  # current Gemini models 404 on regional endpoints
 ollama:
   model: llama3.1:8b
   host: http://localhost:11434

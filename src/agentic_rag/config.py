@@ -38,12 +38,14 @@ class OpenAISettings(BaseModel):
 
 class GoogleSettings(BaseModel):
     """``backend``: api | vertex. Vertex authenticates via Application Default
-    Credentials; ``vertex_project`` falls back to the ADC project when unset."""
+    Credentials; ``vertex_project`` falls back to the ADC project when unset.
+    Current Gemini models are served from the ``global`` endpoint, not regional
+    ones (gemini-3.5-flash 404s in us-central1)."""
 
     model: str = "gemini-3.5-flash"
     backend: str = "api"
     vertex_project: str | None = None
-    vertex_location: str = "us-central1"
+    vertex_location: str = "global"
 
 
 class OllamaSettings(BaseModel):
