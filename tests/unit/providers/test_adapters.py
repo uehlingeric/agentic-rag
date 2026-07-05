@@ -6,7 +6,7 @@ import pytest
 import respx
 from httpx import Response
 
-from agentic_rag.config import RetrySettings, Settings
+from agentic_rag.config import AnthropicSettings, GoogleSettings, RetrySettings, Settings
 from agentic_rag.providers.anthropic import AnthropicProvider
 from agentic_rag.providers.base import (
     Message,
@@ -213,6 +213,78 @@ class TestAnthropicProvider:
         assert count > 0
 
 
+# Anthropic Bedrock backend tests
+class TestAnthropicBedrockBackend:
+    """Test Anthropic provider with the Bedrock backend."""
+
+    @pytest.fixture(autouse=True)
+    def mock_aws_credentials(self, monkeypatch) -> None:
+        """Fake AWS credentials so request signing works offline."""
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test-access-key")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test-secret-key")
+
+    @pytest.fixture
+    def bedrock_settings(self) -> Settings:
+        return Settings(
+            retry=RetrySettings(max_attempts=1, initial_backoff_s=0.0, max_backoff_s=0.0),
+            anthropic=AnthropicSettings(
+                backend="bedrock",
+                bedrock_model="us.anthropic.claude-sonnet-5-v1:0",
+                aws_region="us-east-1",
+            ),
+        )
+
+    @pytest.mark.asyncio
+    async def test_complete_success(self, bedrock_settings: Settings) -> None:
+        """Bedrock backend hits bedrock-runtime and parses the Message response."""
+        provider = AnthropicProvider(bedrock_settings)
+
+        with respx.mock(base_url="https://bedrock-runtime.us-east-1.amazonaws.com") as respx_mock:
+            route = respx_mock.post(path__regex=r"/model/.+/invoke").mock(
+                return_value=Response(
+                    status_code=200,
+                    json={
+                        "id": "msg_1",
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "Hello from Bedrock"}],
+                        "model": "claude-sonnet-5",
+                        "stop_reason": "end_turn",
+                        "usage": {"input_tokens": 10, "output_tokens": 5},
+                    },
+                )
+            )
+
+            completion = await provider.complete([Message(role=Role.USER, content="Hello")])
+
+            request_path = route.calls[0].request.url.path
+            assert "us.anthropic.claude-sonnet-5-v1:0" in request_path
+            assert completion.text == "Hello from Bedrock"
+            assert completion.model == "us.anthropic.claude-sonnet-5-v1:0"
+            assert completion.usage.input_tokens == 10
+            assert completion.usage.output_tokens == 5
+            # Bedrock model IDs are not in the verified pricing table
+            assert completion.usage.cost_usd is None
+
+    @pytest.mark.asyncio
+    async def test_bedrock_requires_bedrock_model(self) -> None:
+        """Missing bedrock_model raises a config error before any network call."""
+        settings = Settings(anthropic=AnthropicSettings(backend="bedrock"))
+        provider = AnthropicProvider(settings)
+
+        with pytest.raises(ValueError, match="bedrock_model"):
+            await provider.complete([Message(role=Role.USER, content="test")])
+
+    @pytest.mark.asyncio
+    async def test_unknown_backend(self) -> None:
+        """Unknown backend raises a config error."""
+        settings = Settings(anthropic=AnthropicSettings(backend="wat"))
+        provider = AnthropicProvider(settings)
+
+        with pytest.raises(ValueError, match="Unknown anthropic backend"):
+            await provider.complete([Message(role=Role.USER, content="test")])
+
+
 # OpenAI tests
 class TestOpenAIProvider:
     """Test OpenAI GPT provider."""
@@ -373,6 +445,78 @@ class TestGoogleProvider:
         provider = GoogleProvider(settings_no_retry)
         count = provider.count_tokens("hello world")
         assert count > 0
+
+
+# Google Vertex backend tests
+class TestGoogleVertexBackend:
+    """Test Google provider with the Vertex AI backend."""
+
+    @pytest.fixture(autouse=True)
+    def mock_adc(self, monkeypatch) -> None:
+        """Fake Application Default Credentials; drop the API key so ADC is used."""
+        from google.oauth2.credentials import Credentials
+
+        monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+        monkeypatch.setattr(
+            "google.auth.default",
+            lambda *args, **kwargs: (Credentials(token="test-token"), "test-project"),
+        )
+
+    @pytest.fixture
+    def vertex_settings(self) -> Settings:
+        return Settings(
+            retry=RetrySettings(max_attempts=1, initial_backoff_s=0.0, max_backoff_s=0.0),
+            google=GoogleSettings(
+                backend="vertex",
+                vertex_project="test-project",
+                vertex_location="us-central1",
+            ),
+        )
+
+    @pytest.mark.asyncio
+    async def test_complete_success(self, vertex_settings: Settings) -> None:
+        """Vertex backend hits the regional aiplatform endpoint with project/location."""
+        provider = GoogleProvider(vertex_settings)
+
+        with respx.mock(base_url="https://us-central1-aiplatform.googleapis.com") as respx_mock:
+            route = respx_mock.post(path__regex=r".*:generateContent$").mock(
+                return_value=Response(
+                    status_code=200,
+                    json={
+                        "candidates": [
+                            {
+                                "content": {
+                                    "parts": [{"text": "Hello from Vertex"}],
+                                    "role": "model",
+                                },
+                                "finishReason": "STOP",
+                            }
+                        ],
+                        "usageMetadata": {
+                            "promptTokenCount": 10,
+                            "candidatesTokenCount": 5,
+                        },
+                    },
+                )
+            )
+
+            completion = await provider.complete([Message(role=Role.USER, content="Hello")])
+
+            request_path = route.calls[0].request.url.path
+            assert "projects/test-project/locations/us-central1" in request_path
+            assert "models/gemini-3.5-flash" in request_path
+            assert completion.text == "Hello from Vertex"
+            assert completion.usage.input_tokens == 10
+            assert completion.usage.output_tokens == 5
+
+    @pytest.mark.asyncio
+    async def test_unknown_backend(self) -> None:
+        """Unknown backend raises a config error."""
+        settings = Settings(google=GoogleSettings(backend="wat"))
+        provider = GoogleProvider(settings)
+
+        with pytest.raises(ValueError, match="Unknown google backend"):
+            await provider.complete([Message(role=Role.USER, content="test")])
 
 
 # Ollama tests

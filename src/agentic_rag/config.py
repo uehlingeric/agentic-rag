@@ -22,7 +22,14 @@ from pydantic_settings import (
 
 
 class AnthropicSettings(BaseModel):
+    """``backend``: api | bedrock. Bedrock model IDs differ from API ones
+    (e.g. ``us.anthropic.claude-...``), so ``bedrock_model`` must be set when
+    ``backend`` is ``bedrock``. Auth uses the standard AWS credential chain."""
+
     model: str = "claude-sonnet-5"
+    backend: str = "api"
+    bedrock_model: str | None = None
+    aws_region: str = "us-east-1"
 
 
 class OpenAISettings(BaseModel):
@@ -30,7 +37,13 @@ class OpenAISettings(BaseModel):
 
 
 class GoogleSettings(BaseModel):
+    """``backend``: api | vertex. Vertex authenticates via Application Default
+    Credentials; ``vertex_project`` falls back to the ADC project when unset."""
+
     model: str = "gemini-3.5-flash"
+    backend: str = "api"
+    vertex_project: str | None = None
+    vertex_location: str = "us-central1"
 
 
 class OllamaSettings(BaseModel):

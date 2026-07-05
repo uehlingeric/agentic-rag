@@ -4,10 +4,16 @@ provider: ollama
 
 anthropic:
   model: claude-sonnet-5
+  # backend: bedrock  # route via AWS Bedrock; auth = AWS credential chain, no key in .env
+  # bedrock_model: us.anthropic.claude-...  # Bedrock model IDs differ from API ones
+  # aws_region: us-east-1
 openai:
   model: gpt-5.4
 google:
   model: gemini-3.5-flash
+  # backend: vertex  # route via Vertex AI; auth = Application Default Credentials
+  # vertex_project: my-gcp-project
+  # vertex_location: us-central1
 ollama:
   model: llama3.1:8b
   host: http://localhost:11434

@@ -41,19 +41,40 @@ def _to_message_params(messages: Sequence[Message]) -> list[MessageParam]:
 
 
 class AnthropicProvider:
-    """Claude LLM provider via Anthropic API."""
+    """Claude LLM provider via the Anthropic API or AWS Bedrock."""
 
     name = "anthropic"
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self._client: anthropic.AsyncAnthropic | None = None
+        self._client: anthropic.AsyncAnthropic | anthropic.AsyncAnthropicBedrock | None = None
 
-    def _get_client(self) -> anthropic.AsyncAnthropic:
-        """Lazy-initialize the async Anthropic client."""
+    def _get_client(self) -> anthropic.AsyncAnthropic | anthropic.AsyncAnthropicBedrock:
+        """Lazy-initialize the async client for the configured backend."""
         if self._client is None:
-            self._client = anthropic.AsyncAnthropic()
+            backend = self.settings.anthropic.backend
+            if backend == "api":
+                self._client = anthropic.AsyncAnthropic()
+            elif backend == "bedrock":
+                self._client = anthropic.AsyncAnthropicBedrock(
+                    aws_region=self.settings.anthropic.aws_region
+                )
+            else:
+                raise ValueError(
+                    f"Unknown anthropic backend: {backend}. Valid options: api, bedrock"
+                )
         return self._client
+
+    def _default_model(self) -> str:
+        """Default model for the configured backend."""
+        cfg = self.settings.anthropic
+        if cfg.backend == "bedrock":
+            if cfg.bedrock_model is None:
+                raise ValueError(
+                    "anthropic.bedrock_model must be set when anthropic.backend is 'bedrock'"
+                )
+            return cfg.bedrock_model
+        return cfg.model
 
     async def complete(
         self,
@@ -65,7 +86,7 @@ class AnthropicProvider:
         temperature: float = 0.0,
     ) -> Completion:
         """Generate a single completion."""
-        resolved_model = model or self.settings.anthropic.model
+        resolved_model = model or self._default_model()
         client = self._get_client()
 
         # Create the actual network call and wrap it with retries
@@ -121,7 +142,7 @@ class AnthropicProvider:
         temperature: float = 0.0,
     ) -> AsyncIterator[StreamEvent]:
         """Stream a completion as events."""
-        resolved_model = model or self.settings.anthropic.model
+        resolved_model = model or self._default_model()
         client = self._get_client()
 
         # Only the initial connection is retried; a stream that fails mid-flight
