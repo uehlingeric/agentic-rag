@@ -323,6 +323,80 @@ def eval_retrieval(
     asyncio.run(_run())
 
 
+@eval_app.command("rerank")
+def eval_rerank(
+    dataset: str = typer.Option("evals/golden/v1.jsonl", help="Golden dataset JSONL path."),
+    provider: str | None = typer.Option(None, help="LLM provider for the llm reranker."),
+    reranker: str = typer.Option("llm", help="Reranker to evaluate: llm|cross-encoder."),
+    pool: int = typer.Option(30, help="Candidate pool retrieved per query."),
+    top_k: int = typer.Option(10, help="Ranking depth for metrics and rerank cut."),
+) -> None:
+    """Run the rerank on/off eval over the golden dataset."""
+    import json
+    from pathlib import Path
+
+    from agentic_rag.config import get_settings
+    from agentic_rag.evals.rerank import run_rerank_eval
+    from agentic_rag.evals.retrieval import load_golden, report_markdown, write_results
+    from agentic_rag.prompts import load_prompt
+    from agentic_rag.providers.registry import get_embedding_provider, get_llm_provider
+    from agentic_rag.rerank.base import Reranker
+    from agentic_rag.retrieval.retriever import Retriever
+
+    settings = get_settings()
+    provider_name = provider or settings.provider
+
+    rr: Reranker
+    config: dict[str, object] = {}
+    if reranker == "llm":
+        from agentic_rag.rerank.llm import LLMReranker
+
+        rr = LLMReranker(get_llm_provider(provider_name, settings), model=settings.rerank.model)
+        config["reranker_provider"] = provider_name
+        config["rerank_prompt"] = load_prompt("rerank").id
+    elif reranker == "cross-encoder":
+        from agentic_rag.rerank.cross_encoder import CrossEncoderReranker
+
+        rr = CrossEncoderReranker(model=settings.rerank.model)
+    else:
+        raise typer.BadParameter(f"Unknown reranker: {reranker}. Valid: llm|cross-encoder.")
+
+    index_dir = settings.data_dir / "index"
+    retriever = Retriever.load(
+        index_dir,
+        get_embedding_provider(settings.embedding.provider, settings),
+        rrf_k=settings.retrieval.rrf_k,
+        candidate_pool=settings.retrieval.candidate_pool,
+    )
+    golden = load_golden(Path(dataset))
+    manifest = json.loads((index_dir / "manifest.json").read_text())
+    config.update(
+        {
+            "dataset": dataset,
+            "n_questions": len(golden),
+            "corpus_fingerprint": manifest["fingerprint"],
+            "embedding_model": manifest["model"],
+            "rrf_k": settings.retrieval.rrf_k,
+        }
+    )
+
+    async def _run() -> None:
+        report = await run_rerank_eval(
+            retriever,
+            rr,
+            golden,
+            modes=["bm25", "dense", "hybrid"],
+            pool=pool,
+            top_k=top_k,
+            config=config,
+        )
+        typer.echo(report_markdown(report))
+        path = write_results(report, Path("evals/results"), prefix="rerank")
+        typer.echo(f"Results written to {path}")
+
+    asyncio.run(_run())
+
+
 @app.command()
 def ingest(
     doc: list[str] = typer.Option(  # noqa: B008

@@ -360,12 +360,13 @@ def report_json(report: EvalReport) -> dict[str, object]:
     }
 
 
-def write_results(report: EvalReport, results_dir: Path) -> Path:
+def write_results(report: EvalReport, results_dir: Path, *, prefix: str = "retrieval") -> Path:
     """Write report to results directory with timestamp.
 
     Args:
         report: EvalReport.
         results_dir: Directory to write into.
+        prefix: Filename prefix naming the eval family (e.g. "retrieval", "rerank").
 
     Returns:
         Path to written file.
@@ -375,7 +376,7 @@ def write_results(report: EvalReport, results_dir: Path) -> Path:
     # Timestamp: YYYYMMDD-HHMMSSZ (UTC)
     now_utc = datetime.now(timezone.utc)  # noqa: UP017 (requires Python 3.13+)
     timestamp = now_utc.strftime("%Y%m%d-%H%M%SZ")
-    filename = f"retrieval-{timestamp}.json"
+    filename = f"{prefix}-{timestamp}.json"
     filepath = results_dir / filename
 
     data = report_json(report)
