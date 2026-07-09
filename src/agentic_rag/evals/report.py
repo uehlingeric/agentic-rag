@@ -241,6 +241,207 @@ def render_rerank_table(results_path: Path, cross_encoder_path: Path | None = No
     return "\n".join(lines)
 
 
+def render_agentic_comparison(summary_path: Path) -> str:
+    """Render agentic vs. vanilla comparison from summary JSON.
+
+    Input: a summary.json containing BOTH pipelines for >= 1 provider at the
+    same mode/rerank. Output markdown:
+    1. A headline table, one row per (provider, pipeline) sorted by provider
+       then vanilla-first: columns Provider | Pipeline | Faithfulness | Relevance |
+       Citation Acc. | False refusal | Refusal correct | Mean revisions |
+       Caveat rate | p50 latency (s) | Gen cost ($).
+    2. A per-type delta table, one row per (provider, answerable type):
+       columns Provider | Type | n | F van | F ag | DF | R van | R ag | DR |
+       C van | C ag | DC. Deltas = agentic - vanilla, signed with 2dp.
+
+    Raises ValueError if no agentic config is present.
+    """
+    with summary_path.open() as f:
+        data = json.load(f)
+
+    configs = data["configs"]
+
+    # Filter for agentic configs
+    agentic_configs = [c for c in configs if c.get("pipeline") == "agentic"]
+    vanilla_configs = [c for c in configs if c.get("pipeline", "vanilla") == "vanilla"]
+
+    if not agentic_configs:
+        raise ValueError("Summary contains no agentic config; cannot render comparison")
+
+    lines = []
+    lines.append("## Agentic vs. Vanilla Comparison")
+    lines.append("")
+
+    # Build headline table: one row per (provider, pipeline)
+    headline_rows = []
+    providers_in_summary = sorted(set(c["provider"] for c in configs))
+    for provider in providers_in_summary:
+        # Vanilla row for this provider (if exists)
+        vanilla_for_provider = next((c for c in vanilla_configs if c["provider"] == provider), None)
+        if vanilla_for_provider is not None:
+            headline_rows.append(
+                {
+                    "provider": provider,
+                    "pipeline": "vanilla",
+                    "faithfulness": vanilla_for_provider["scores"].get("faithfulness"),
+                    "relevance": vanilla_for_provider["scores"].get("relevance"),
+                    "citation_accuracy": vanilla_for_provider["scores"].get("citation_accuracy"),
+                    "false_refusal": vanilla_for_provider.get("false_refusal_rate"),
+                    "refusal_correct": vanilla_for_provider.get("refusal_correct_rate"),
+                    "mean_revisions": None,
+                    "caveat_rate": None,
+                    "p50_latency": vanilla_for_provider.get("latency_s", {}).get("p50"),
+                    "gen_cost": vanilla_for_provider.get("gen_cost_usd"),
+                }
+            )
+        # Agentic row for this provider (if exists)
+        agentic_for_provider = next((c for c in agentic_configs if c["provider"] == provider), None)
+        if agentic_for_provider is not None:
+            agent_stats = agentic_for_provider.get("agent") or {}
+            headline_rows.append(
+                {
+                    "provider": provider,
+                    "pipeline": "agentic",
+                    "faithfulness": agentic_for_provider["scores"].get("faithfulness"),
+                    "relevance": agentic_for_provider["scores"].get("relevance"),
+                    "citation_accuracy": agentic_for_provider["scores"].get("citation_accuracy"),
+                    "false_refusal": agentic_for_provider.get("false_refusal_rate"),
+                    "refusal_correct": agentic_for_provider.get("refusal_correct_rate"),
+                    "mean_revisions": agent_stats.get("mean_revisions"),
+                    "caveat_rate": agent_stats.get("caveat_rate"),
+                    "p50_latency": agentic_for_provider.get("latency_s", {}).get("p50"),
+                    "gen_cost": agentic_for_provider.get("gen_cost_usd"),
+                }
+            )
+
+    # Format headline table
+    def fmt_score(val: float | None) -> str:
+        """Format score to 2dp or —."""
+        return f"{val:.2f}" if val is not None else "—"
+
+    def fmt_cost(val: float | None) -> str:
+        """Format cost to $X.XX or —."""
+        return f"${val:.2f}" if val is not None else "—"
+
+    lines.append(
+        "| Provider | Pipeline | Faith. | Relev. | Cit. Acc. | "
+        "False refusal | Correct refusal | Mean revisions | Caveat | p50 (s) | Cost ($) |"
+    )
+    lines.append(
+        "|----------|----------|--------|--------|-----------|"
+        "-----------------|-----------------|-----------------|--------|---------|---------|"
+    )
+
+    for row in headline_rows:
+        cells = [
+            row["provider"],
+            row["pipeline"],
+            fmt_score(row["faithfulness"]),
+            fmt_score(row["relevance"]),
+            fmt_score(row["citation_accuracy"]),
+            fmt_score(row["false_refusal"]),
+            fmt_score(row["refusal_correct"]),
+            fmt_score(row["mean_revisions"]),
+            fmt_score(row["caveat_rate"]),
+            fmt_score(row["p50_latency"]),
+            fmt_cost(row["gen_cost"]),
+        ]
+        lines.append("| " + " | ".join(cells) + " |")
+
+    lines.append("")
+
+    # Build per-type delta table
+    lines.append(
+        "### By Type: Faithfulness / Relevance / Citation Accuracy Deltas (agentic - vanilla)"
+    )
+    lines.append("")
+
+    type_rows = []
+    for provider in providers_in_summary:
+        vanilla_for_provider = next((c for c in vanilla_configs if c["provider"] == provider), None)
+        agentic_for_provider = next((c for c in agentic_configs if c["provider"] == provider), None)
+        # Both must exist to compute deltas
+        if vanilla_for_provider is None or agentic_for_provider is None:
+            continue
+
+        # Get types present in both
+        vanilla_types = set(vanilla_for_provider.get("by_type", {}).keys())
+        agentic_types = set(agentic_for_provider.get("by_type", {}).keys())
+        common_types = vanilla_types & agentic_types
+
+        for ex_type in sorted(common_types):
+            # Only include answerable types
+            if ex_type == "unanswerable":
+                continue
+            van_type_data = vanilla_for_provider["by_type"][ex_type]
+            ag_type_data = agentic_for_provider["by_type"][ex_type]
+
+            van_f = van_type_data["scores"].get("faithfulness")
+            ag_f = ag_type_data["scores"].get("faithfulness")
+            delta_f = None if (van_f is None or ag_f is None) else ag_f - van_f
+
+            van_r = van_type_data["scores"].get("relevance")
+            ag_r = ag_type_data["scores"].get("relevance")
+            delta_r = None if (van_r is None or ag_r is None) else ag_r - van_r
+
+            van_c = van_type_data["scores"].get("citation_accuracy")
+            ag_c = ag_type_data["scores"].get("citation_accuracy")
+            delta_c = None if (van_c is None or ag_c is None) else ag_c - van_c
+
+            type_rows.append(
+                {
+                    "provider": provider,
+                    "type": ex_type,
+                    "n": van_type_data["n"],
+                    "f_van": van_f,
+                    "f_ag": ag_f,
+                    "delta_f": delta_f,
+                    "r_van": van_r,
+                    "r_ag": ag_r,
+                    "delta_r": delta_r,
+                    "c_van": van_c,
+                    "c_ag": ag_c,
+                    "delta_c": delta_c,
+                }
+            )
+
+    def fmt_delta(val: float | None) -> str:
+        """Format delta to +X.XX or -X.XX or —."""
+        if val is None:
+            return "—"
+        if val >= 0:
+            return f"+{val:.2f}"
+        else:
+            return f"{val:.2f}"
+
+    lines.append(
+        "| Provider | Type | n | F van | F ag | ΔF | R van | R ag | ΔR | C van | C ag | ΔC |"
+    )
+    lines.append(
+        "|----------|------|------|-------|-------|-------|-------|-------|-------|-------|-------|-------|"
+    )
+
+    for row in type_rows:
+        cells = [
+            row["provider"],
+            row["type"],
+            str(row["n"]),
+            fmt_score(row["f_van"]),
+            fmt_score(row["f_ag"]),
+            fmt_delta(row["delta_f"]),
+            fmt_score(row["r_van"]),
+            fmt_score(row["r_ag"]),
+            fmt_delta(row["delta_r"]),
+            fmt_score(row["c_van"]),
+            fmt_score(row["c_ag"]),
+            fmt_delta(row["delta_c"]),
+        ]
+        lines.append("| " + " | ".join(cells) + " |")
+
+    lines.append("")
+    return "\n".join(lines)
+
+
 def render_generation_section(summary_path: Path) -> str:
     """Render generation quality and operations section from summary JSON.
 

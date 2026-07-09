@@ -24,12 +24,13 @@ from pathlib import Path
 import typer
 
 from agentic_rag.config import get_settings
-from agentic_rag.evals.generation import RunConfig, estimate_cost, run_config, summarize
+from agentic_rag.evals.generation import RunConfig, estimate_cost, eval_set, run_config, summarize
 from agentic_rag.evals.retrieval import load_golden
 
 _DEFAULT_PROVIDERS = ["ollama"]
 _DEFAULT_MODES = ["bm25", "dense", "hybrid"]
 _DEFAULT_RERANKS = ["none"]
+_DEFAULT_PIPELINES = ["vanilla"]
 
 app = typer.Typer()
 
@@ -52,6 +53,9 @@ def main(
     reranks: list[str] = typer.Option(  # noqa: B008
         _DEFAULT_RERANKS, "--rerank", help="Rerank modes to evaluate"
     ),
+    pipelines: list[str] = typer.Option(  # noqa: B008
+        _DEFAULT_PIPELINES, "--pipeline", help="Pipeline variants: vanilla|agentic"
+    ),
     dataset: str = typer.Option("evals/golden/v2.jsonl", "--dataset", help="Golden dataset path"),
     run_id: str | None = typer.Option(
         None, "--run-id", help="Run identifier; auto-generated if not provided"
@@ -66,7 +70,7 @@ def main(
     """Run generation evaluation over golden examples."""
     # Load golden dataset
     try:
-        golden = load_golden(Path(dataset))
+        golden_full = load_golden(Path(dataset))
     except FileNotFoundError as exc:
         typer.secho(f"Error: Golden dataset not found at {dataset}", fg="red", err=True)
         raise typer.Exit(1) from exc
@@ -74,9 +78,21 @@ def main(
         typer.secho(f"Error parsing dataset: {e}", fg="red", err=True)
         raise typer.Exit(1) from e
 
+    # Drop held-out items for generation eval
+    golden = eval_set(golden_full)
+    n_held_out = len(golden_full) - len(golden)
+    if n_held_out > 0:
+        typer.echo(
+            f"Excluded {n_held_out} held-out items (planner few-shots); evaluating {len(golden)}."
+        )
+
     # Build config matrix
     configs = [
-        RunConfig(provider=p, mode=m, rerank=r) for p in providers for m in modes for r in reranks
+        RunConfig(provider=p, mode=m, rerank=r, pipeline=pl)
+        for p in providers
+        for m in modes
+        for r in reranks
+        for pl in pipelines
     ]
 
     # Load settings for cost estimation
@@ -87,10 +103,10 @@ def main(
 
     # Print cost table
     typer.echo("\nEstimated costs per config:")
-    typer.echo("=" * 80)
-    header = f"{'Provider':<12} {'Mode':<8} {'Rerank':<15} {'Cost':<12}"
+    typer.echo("=" * 100)
+    header = f"{'Provider':<12} {'Mode':<8} {'Rerank':<15} {'Pipeline':<10} {'Cost':<12}"
     typer.echo(header)
-    typer.echo("-" * 80)
+    typer.echo("-" * 100)
 
     total_cost = 0.0
     has_unpriceable = False
@@ -100,11 +116,13 @@ def main(
             has_unpriceable = True
         else:
             total_cost += cost
-        typer.echo(f"{cfg.provider:<12} {cfg.mode:<8} {cfg.rerank:<15} {cost_str:<12}")
+        typer.echo(
+            f"{cfg.provider:<12} {cfg.mode:<8} {cfg.rerank:<15} {cfg.pipeline:<10} {cost_str:<12}"
+        )
 
-    typer.echo("-" * 80)
+    typer.echo("-" * 100)
     total_str = _format_cost(total_cost) if not has_unpriceable else "? (some configs unpriceable)"
-    typer.echo(f"{'TOTAL ESTIMATED COST:':<35} {total_str}")
+    typer.echo(f"{'TOTAL ESTIMATED COST:':<47} {total_str}")
     if has_unpriceable:
         typer.echo("(Unpriceable: ? denotes unknown model prices; assumes 0 cost)")
     typer.echo()
@@ -175,7 +193,8 @@ def main(
         provider = cfg_summary["provider"]
         mode = cfg_summary["mode"]
         rerank = cfg_summary["rerank"]
-        typer.echo(f"  {provider:<12} | {mode:<8} | {rerank:<15}")
+        pipeline = cfg_summary.get("pipeline", "vanilla")
+        typer.echo(f"  {provider:<12} | {mode:<8} | {rerank:<15} | {pipeline:<10}")
         typer.echo(f"    Model: {cfg_summary['model']}")
         n_items = cfg_summary["n_items"]
         n_judged = cfg_summary["n_judged"]
@@ -218,6 +237,15 @@ def main(
         gen_cost = _format_cost(cfg_summary["gen_cost_usd"])
         judge_cost = _format_cost(cfg_summary["judge_cost_usd"])
         typer.echo(f"    Cost: {gen_cost} generation | {judge_cost} judging")
+
+        # Agent stats for agentic configs
+        if pipeline == "agentic" and cfg_summary.get("agent") is not None:
+            agent = cfg_summary["agent"]
+            typer.echo(
+                f"    Agent: multi-hop rate {agent['multi_hop_rate']:.4f} | "
+                f"mean revisions {agent['mean_revisions']:.4f} | "
+                f"caveat rate {agent['caveat_rate']:.4f}"
+            )
 
     typer.echo()
     typer.echo(f"Summary written to: {summary_path}")
