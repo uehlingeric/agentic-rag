@@ -22,7 +22,14 @@ from pydantic_settings import (
 
 
 class AnthropicSettings(BaseModel):
+    """``backend``: api | bedrock. Bedrock model IDs differ from API ones
+    (e.g. ``us.anthropic.claude-...``), so ``bedrock_model`` must be set when
+    ``backend`` is ``bedrock``. Auth uses the standard AWS credential chain."""
+
     model: str = "claude-sonnet-5"
+    backend: str = "api"
+    bedrock_model: str | None = None
+    aws_region: str = "us-east-1"
 
 
 class OpenAISettings(BaseModel):
@@ -30,7 +37,15 @@ class OpenAISettings(BaseModel):
 
 
 class GoogleSettings(BaseModel):
+    """``backend``: api | vertex. Vertex authenticates via Application Default
+    Credentials; ``vertex_project`` falls back to the ADC project when unset.
+    Current Gemini models are served from the ``global`` endpoint, not regional
+    ones (gemini-3.5-flash 404s in us-central1)."""
+
     model: str = "gemini-3.5-flash"
+    backend: str = "api"
+    vertex_project: str | None = None
+    vertex_location: str = "global"
 
 
 class OllamaSettings(BaseModel):
@@ -56,6 +71,20 @@ class RetrievalSettings(BaseModel):
     rrf_k: int = 60
 
 
+class RerankSettings(BaseModel):
+    """``mode``: none | llm | cross-encoder. ``model`` overrides the backend default."""
+
+    mode: str = "none"
+    candidate_pool: int = 30
+    top_k: int = 8
+    model: str | None = None
+
+
+class SynthesisSettings(BaseModel):
+    max_context_tokens: int = 6000
+    max_answer_tokens: int = 1024
+
+
 class RetrySettings(BaseModel):
     max_attempts: int = 5
     initial_backoff_s: float = 1.0
@@ -78,6 +107,8 @@ class Settings(BaseSettings):
     embedding: EmbeddingSettings = EmbeddingSettings()
     chunking: ChunkingSettings = ChunkingSettings()
     retrieval: RetrievalSettings = RetrievalSettings()
+    rerank: RerankSettings = RerankSettings()
+    synthesis: SynthesisSettings = SynthesisSettings()
     retry: RetrySettings = RetrySettings()
     data_dir: Path = Path("data")
 
