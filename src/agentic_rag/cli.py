@@ -78,6 +78,14 @@ def ask(
     ),
     stream: bool = typer.Option(False, "--stream", help="Stream tokens as they arrive."),
     json_out: bool = typer.Option(False, "--json", help="Emit a JSON record for scripting."),
+    agentic: bool = typer.Option(
+        False,
+        "--agentic",
+        help="Run the planner/critic agent loop instead of the vanilla pipeline.",
+    ),
+    trace: bool = typer.Option(
+        False, "--trace", help="With --agentic: dump every graph node's input/output as JSON."
+    ),
 ) -> None:
     """Answer a question from the corpus with inline citations."""
     import json
@@ -92,6 +100,10 @@ def ask(
 
     if stream and json_out:
         raise typer.BadParameter("--stream and --json are mutually exclusive.")
+    if trace and not agentic:
+        raise typer.BadParameter("--trace requires --agentic (only the graph is traceable).")
+    if agentic and stream:
+        raise typer.BadParameter("--agentic does not stream (the critic gates the final answer).")
 
     settings = get_settings()
     llm = get_llm_provider(provider or settings.provider, settings)
@@ -167,8 +179,53 @@ def ask(
         typer.secho(f"[{timings}]", fg="bright_black", err=True)
         typer.secho(_usage_line(llm.name, answer.usage), fg="bright_black", err=True)
 
+    async def _run_agentic() -> None:
+        from agentic_rag.agent.graph import AgenticPipeline
+        from agentic_rag.agent.state import trace_to_json
+
+        agent_pipeline = AgenticPipeline(retriever, reranker, llm, settings)
+        result = await agent_pipeline.ask(question, mode=retrieval_mode)
+        answer = result.answer
+
+        agent_meta: dict[str, object] = {
+            "plan": result.plan.kind.value,
+            "sub_queries": list(result.plan.sub_queries),
+            "revisions": result.revisions,
+            "caveat": result.caveat,
+        }
+        if json_out:
+            record = _record(answer)
+            record["pipeline"] = "agentic"
+            record["agent"] = agent_meta
+            if trace:
+                record["trace"] = trace_to_json(result.trace)
+            typer.echo(json.dumps(record, indent=2))
+            return
+        if answer.refusal:
+            msg = "Not found in corpus." + (f" {answer.text}" if answer.text else "")
+            typer.secho(msg, fg="yellow")
+        else:
+            typer.echo(answer.text)
+        if result.caveat:
+            typer.secho(
+                "warning: revision cap reached with unresolved critique — answer may be incomplete",
+                fg="yellow",
+                err=True,
+            )
+        _footer(answer)
+        typer.secho(
+            f"[plan {result.plan.kind.value} | {len(result.plan.sub_queries)} sub-queries | "
+            f"{result.revisions} revisions]",
+            fg="bright_black",
+            err=True,
+        )
+        if trace:
+            typer.echo(json.dumps(trace_to_json(result.trace), indent=2))
+
     async def _run() -> None:
-        if stream:
+        if agentic:
+            await _run_agentic()
+        elif stream:
             final: Answer | None = None
             async for event in pipeline.ask_stream(question, mode=retrieval_mode):
                 if event.answer is not None:
