@@ -85,6 +85,17 @@ class SynthesisSettings(BaseModel):
     max_answer_tokens: int = 1024
 
 
+class JudgeSettings(BaseModel):
+    """LLM-as-judge scoring (ADR-006). An answer is scored by the first entry in
+    ``providers`` that differs from the provider that generated it, so headline
+    numbers never come from a self-judging model."""
+
+    providers: list[str] = ["anthropic", "google"]
+    prompt_version: int | None = None
+    max_tokens: int = 768
+    max_parse_retries: int = 2
+
+
 class RetrySettings(BaseModel):
     max_attempts: int = 5
     initial_backoff_s: float = 1.0
@@ -109,6 +120,7 @@ class Settings(BaseSettings):
     retrieval: RetrievalSettings = RetrievalSettings()
     rerank: RerankSettings = RerankSettings()
     synthesis: SynthesisSettings = SynthesisSettings()
+    judge: JudgeSettings = JudgeSettings()
     retry: RetrySettings = RetrySettings()
     data_dir: Path = Path("data")
 
