@@ -1,7 +1,7 @@
 # Week 3 Spot-Check: Cited Generation on a Local 8B Model
 
 **Date:** 2026-07-04
-**Config:** `agentic-rag ask` pipeline — hybrid retrieval (pool 30) → no rerank → context ≤6000 tokens → `synthesis.v2` → citation validation. Provider: ollama / llama3.1:8b, temperature 0, RTX 5060 Ti 16GB. Paid providers pending API keys; their runs will be appended as a compliance-delta table when available.
+**Config:** `agentic-rag ask` pipeline — hybrid retrieval (pool 30) → no rerank → context ≤6000 tokens → `synthesis.v2` → citation validation. Provider: ollama / llama3.1:8b, temperature 0, RTX 5060 Ti 16GB. Cloud-provider probes on the same pipeline are in the provider-delta section at the end.
 
 Every answer below was reviewed by hand against the golden reference answer AND against the
 text of each cited chunk (does the excerpt actually support the claim it is attached to?).
@@ -78,3 +78,49 @@ and reported it as designed.
 - Judgments are one reviewer's reading of the golden references and cited excerpts.
 - fips-199/fips-200 questions ground in glossary/appendix chunks only (ADR-003 corpus quirk);
   q25's correct answer cites the fips-200 glossary rather than body text, as expected.
+
+## Provider delta: llama3.1:8b vs Vertex Gemini vs Bedrock Claude
+
+**Date:** 2026-07-09. Same pipeline and config as above, two probes: q11 (the worst
+attribution case in the table — the local model rotated all three markers) and q26
+(unanswerable). Cloud backends: `google.backend=vertex` (gemini-3.5-flash, global endpoint,
+ADC) and `anthropic.backend=bedrock` (`global.anthropic.claude-sonnet-4-6` inference
+profile). Raw JSONs in `data/week3-live-verify/` (gitignored).
+
+Bedrock model note: `claude-sonnet-5` invocation is gated at runtime for this account
+("not available for this account … contact AWS Sales") even though the use-case form was
+accepted and `get-foundation-model-availability` shows all four indicators green — still
+403 five days after agreement acceptance, on both the `us.` and `global.` profiles. Claude
+Sonnet 4.6 invokes normally, so the Bedrock column uses it. Its global-profile rate card
+matches direct-API pricing ($3/$15 per MTok, no intro discount), now in `pricing.py`.
+
+### q11 — synthesis with per-control attribution
+
+| Provider / model | Correctness | Attribution | Tokens in/out | Cost | Synth latency |
+|---|---|---|---|---|---|
+| ollama llama3.1:8b | Mostly correct | All 3 markers rotated (see table above) | n/a | $0 | ~4.8s |
+| vertex gemini-3.5-flash | Correct | Clean: AC-1→[3], AC-2→[5][7][8], AC-10→[1] | 3813/241 | $0.0079 | 2.8s |
+| bedrock claude-sonnet-4-6 | Correct, most detailed | Clean across 7 markers, incl. a grounded 800-171→CUI 03.01.01 crosswalk aside cited to the Appendix C chunk | 3902/591 | $0.0206 | 14.0s |
+
+### q26 — unanswerable, expects refusal
+
+| Provider / model | Refused | Citations | Tokens in/out | Cost | Synth latency |
+|---|---|---|---|---|---|
+| ollama llama3.1:8b | Yes | 0 | n/a | $0 | ~0.6s |
+| vertex gemini-3.5-flash | Yes | 0 | 4575/33 | $0.0072 | 1.7s |
+| bedrock claude-sonnet-4-6 | Yes (quotes the near-miss excerpts in its explanation) | 0 | 4687/68 | $0.0151 | 3.1s |
+
+Bedrock costs are computed at the verified rate card; the saved JSONs report `cost_usd: 0.0`
+because these runs predate the `pricing.py` row.
+
+### Takeaways
+
+1. Both cloud models fix q11's marker rotation completely — direct confirmation of finding
+   #2 above (answer quality and attribution are model-bound, not retrieval-bound).
+2. `synthesis.v2` refusal behavior transfers across all three providers unchanged: 3/3
+   clean refusals with zero citations on q26.
+3. Claude wrote 2.4× more output than Gemini on q11 (591 vs 241 tokens) — a deeper layered
+   analysis plus one extra grounded cross-document claim — at ~2.6× the cost and ~5× the
+   synthesis latency. Gemini is the better cost/latency point; Claude the better ceiling.
+   A two-question probe orders providers but cannot rank them — that is week 4's job
+   (judge-scored full matrix).
