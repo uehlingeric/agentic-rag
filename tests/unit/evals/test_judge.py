@@ -642,15 +642,16 @@ async def test_judge_live_wrong_excerpt_citation() -> None:
         ),
     )
 
-    # Question about account management but cites training excerpt (wrong citation)
+    # The claim comes from AC-2's text, but the marker points at the AT-2 excerpt:
+    # a misattributed citation, isolated from relevance (the answer is on-topic).
     cited = [
         CitedChunk(marker=1, chunk=ac2),
         CitedChunk(marker=2, chunk=at2),
     ]
     question = "How does the organization manage system accounts?"
     answer = (
-        "Organizations manage system accounts by ensuring personnel have received proper "
-        "training and awareness before they access the system [2]."
+        "Account management includes the creation, activation, modification, disablement, "
+        "and removal of system accounts [2]."
     )
 
     result = await judge_answer(
