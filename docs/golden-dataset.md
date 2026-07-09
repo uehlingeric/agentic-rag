@@ -91,18 +91,89 @@ Citations are matched at the **section level** against chunk `section_ids`:
 
 ## Versioning
 
-**v1** (current) = 30 questions, 41 total citations
+### v1 (baseline) = 30 questions, 41 total citations
 - Baseline coverage across all five documents
-- Planned expansion to **v2** (50 questions) in week 4 of development
+- Lookup (10), Synthesis (10), Multihop (5), Unanswerable (5)
 
-Future versions will increase question density per document and add domain-specific question types (e.g., compliance gap analysis, control interaction graphs).
+### v2 (current) = 50 questions, 69 total citations
+- Expands v1 baseline with 20 new items targeting underrepresented documents and question types
+- **ID Stability**: First 30 items (v1-q01 through v1-q30) are byte-for-byte identical to v1.jsonl; new items use v2-q31 through v2-q50 IDs, enabling v1 results to remain comparable across versions
+- Lookup (16), Synthesis (14), Multihop (12), Unanswerable (8)
+
+#### v2 Expansion Rationale
+
+The 20 new items fill coverage gaps identified in v1:
+
+1. **AI RMF expansion** (5 items: v2-q31 to v2-q35)
+   - v1 had only 3 AI RMF citations; v2 adds 9 total (9 citations across 5 questions)
+   - 2 lookup (MAP 1.1 intended purposes, MANAGE 1.3 risk responses)
+   - 2 synthesis (GOVERN 1.4 + GOVERN 1.6, MAP vs MEASURE functions)
+   - 1 multihop (AI RMF MANAGE + SP 800-53 AC-2)
+
+2. **FIPS expansion** (4 items: v2-q36 to v2-q39)
+   - v1 had 5 FIPS citations; v2 brings the total to 11
+   - 3 lookup (FIPS-199 Integrity, FIPS-200 Accreditation, FIPS-200 Adequate Security)
+   - 0 synthesis (the corpus's FIPS chunks concentrate in the appendix-a glossaries — too few
+     distinct sections for within-document synthesis)
+   - 1 multihop (FIPS-199 security objectives + SP 800-53 AC-2)
+
+3. **SP 800-171r3 expansion** (4 items: v2-q40 to v2-q43)
+   - v1 had 4 SP 800-171r3 citations; v2 brings the total to 12
+   - 1 lookup (Requirement 3.2.1 security literacy training)
+   - 2 synthesis (3.2.1 + 3.3.1 logging, 3.1.8 logon + 3.2.1 training)
+   - 1 multihop (3.1.8 logon attempts + SP 800-53 AC-11 device lock)
+
+4. **Cross-document multihop** (4 items: v2-q44 to v2-q47)
+   - Expands multihop reasoning across document pairs not covered in v1
+   - FIPS-200 + SP 800-171r3
+   - AI RMF GOVERN + SP 800-53 CP-1
+   - FIPS-199 + SP 800-171r3 training
+   - AI RMF MAP + SP 800-53 SC-7 boundary protection
+
+5. **Unanswerable items** (3 items: v2-q48 to v2-q50)
+   - Complements v1's 5 unanswerable items with 3 additional near-miss questions
+   - AI bias/fairness metrics (corpus covers evaluation but not specific thresholds)
+   - Control baseline cost-benefit framework (corpus covers controls, not economics)
+   - SP 800-53 revision timeline (corpus covers current version, not deprecation schedules)
+
+#### v2 Coverage Matrix
+
+Citation counts by document and question type (v2 = 50 questions, 69 total citations;
+unanswerable questions carry no citations and are counted separately):
+
+| Document   | Lookup | Synthesis | Multihop | Total |
+|------------|--------|-----------|----------|-------|
+| sp800-53r5 |    8   |    17     |    9     |  34   |
+| sp800-171r3|    2   |     6     |    4     |  12   |
+| fips-199   |    2   |     0     |    4     |   6   |
+| fips-200   |    2   |     0     |    3     |   5   |
+| ai-rmf     |    2   |     6     |    4     |  12   |
+| **Total**  | **16** |  **29**   | **24**   | **69**|
+
+Question counts by type: 16 lookup, 14 synthesis, 12 multihop, 8 unanswerable. All five
+documents appear in both single-document and cross-document questions, with AI RMF and
+SP 800-171r3 coverage brought closer to parity with SP 800-53r5.
+
+#### Answerable vs. Unanswerable Split
+
+- **v1**: 25 answerable, 5 unanswerable (83% / 17%)
+- **v2**: 42 answerable, 8 unanswerable (84% / 16%)
+
+The slight increase in unanswerable items maintains representation of near-miss queries an analyst might pose but the corpus cannot fully address.
+
+### Future Versions
+
+Future versions will:
+- Increase question density further, reaching 75–100 items
+- Add domain-specific question types (e.g., compliance gap analysis, control interaction graphs, scenario-based reasoning)
+- Expand coverage of emerging documents (e.g., newer NIST AI RMF guidance, NIST Cybersecurity Framework alignment)
 
 ## How to Use
 
 For retrieval evaluation:
 ```python
-# Load dataset
-with open("evals/golden/v1.jsonl") as f:
+# Load dataset (use v2.jsonl for latest, or v1.jsonl for baseline)
+with open("evals/golden/v2.jsonl") as f:
     questions = [json.loads(line) for line in f]
 
 # For each question, retrieve chunks and evaluate:
@@ -122,3 +193,12 @@ For end-to-end RAG evaluation:
 # Check both retrieval (does it find the right chunks?) 
 # and generation (does it synthesize an accurate answer?)
 ```
+
+## Stability and Versioning for Continuous Evaluation
+
+To support continuous evaluation while tracking improvements:
+
+- **v1 and v2 are both stable datasets**: v2 appends 20 new items to the 30 v1 items without modification
+- **ID Scheme preserves comparability**: v1-q01 through v1-q30 remain unchanged (byte-for-byte identical in v2.jsonl), so evaluation results on v1 questions are directly comparable across model versions
+- **Upgrade path**: Metrics computed on v1 (30 questions) remain valid; results on v2 (50 questions) extend the evaluation with greater coverage
+- **Example**: A model that scores 80% on v1-q01:q30 in one evaluation run can be compared directly to a later run; separately, aggregate scores on v2-q01:q50 track improvement over a larger question set
