@@ -36,6 +36,10 @@ class Table:
 # Type alias for manifest entries
 ManifestEntry = Fragment | Table
 
+# The committed benchmark run rendered by default; a fresh run overrides it via
+# build(generation_summary=...) / build_report.py --generation-summary.
+GENERATION_SUMMARY = Path("evals/results/generation-20260709-200512Z/summary.json")
+
 
 def _round_4dp(value: float) -> str:
     """Format a float to 4 decimal places."""
@@ -290,7 +294,7 @@ def render_generation_section(summary_path: Path) -> str:
 
     if judge_groups:
         for (judge_provider, judge_model, judge_prompt), providers in judge_groups.items():
-            sorted_providers = sorted(providers)
+            sorted_providers = sorted(set(providers))
             providers_str = ", ".join(sorted_providers)
             lines.append(
                 f"- {providers_str} answers judged by {judge_provider} "
@@ -473,8 +477,8 @@ def build(out_path: Path, *, generation_summary: Path | None = None) -> str:
 
     Args:
         out_path: Output path for the markdown document.
-        generation_summary: Optional path to generation results summary JSON.
-                            If not provided, no generation section is included.
+        generation_summary: Path to a generation summary JSON; defaults to the
+                            pinned committed run (GENERATION_SUMMARY).
 
     Returns:
         The assembled markdown document as a string.
@@ -511,18 +515,16 @@ def build(out_path: Path, *, generation_summary: Path | None = None) -> str:
             },
         ),
         Fragment(Path("docs/fragments/benchmarks/05-week3-analysis.md")),
+        Table(
+            kind="generation",
+            source_path=(
+                generation_summary if generation_summary is not None else GENERATION_SUMMARY
+            ),
+            params={},
+        ),
+        Fragment(Path("docs/fragments/benchmarks/07-week4-analysis.md")),
         Fragment(Path("docs/fragments/benchmarks/06-reproduce.md")),
     ]
-
-    # If generation summary provided, add a generation section
-    if generation_summary is not None:
-        manifest.append(
-            Table(
-                kind="generation",
-                source_path=generation_summary,
-                params={},
-            )
-        )
 
     # Process manifest
     for entry in manifest:
