@@ -10,12 +10,26 @@ def test_defaults() -> None:
     assert s.chunking.overlap_tokens == 64
 
 
+def test_backend_defaults() -> None:
+    s = Settings()
+    assert s.anthropic.backend == "api"
+    assert s.anthropic.bedrock_model is None
+    assert s.anthropic.aws_region == "us-east-1"
+    assert s.google.backend == "api"
+    assert s.google.vertex_project is None
+    assert s.google.vertex_location == "global"
+
+
 def test_env_override(monkeypatch) -> None:
     monkeypatch.setenv("AGENTIC_RAG_PROVIDER", "anthropic")
     monkeypatch.setenv("AGENTIC_RAG_OLLAMA__HOST", "http://gpu-box:11434")
+    monkeypatch.setenv("AGENTIC_RAG_ANTHROPIC__BACKEND", "bedrock")
+    monkeypatch.setenv("AGENTIC_RAG_GOOGLE__BACKEND", "vertex")
     s = Settings()
     assert s.provider == "anthropic"
     assert s.ollama.host == "http://gpu-box:11434"
+    assert s.anthropic.backend == "bedrock"
+    assert s.google.backend == "vertex"
 
 
 def test_usage_addition() -> None:
