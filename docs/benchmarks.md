@@ -75,6 +75,91 @@ carry a stage that measurably hurts. Boilerplate stripping in chunk text is a we
 candidate fix (it should help the cross-encoder and shrink synthesis prompts). Rerun this
 table with an API-grade model as the listwise judge once provider keys are configured.
 
+## Generation — provider × retrieval matrix
+
+Run `generation-20260709-200512Z`, dataset v2 (50 examples), synthesis prompt synthesis.v2.
+
+- anthropic answers judged by google `gemini-3.5-flash` (judge.v2)
+- google, ollama answers judged by anthropic `global.anthropic.claude-sonnet-4-6` (judge.v2)
+
+| Provider | Mode | Rerank | Faithfulness | Relevance | Citation acc. | Refusal correct | False refusal | Judged |
+|----------|------|--------|--------------|-----------|----------------|-----------------|---------------|--------|
+| anthropic | bm25 | none | **5.00** | **5.00** | **5.00** | **1.00** | 0.45 | 23/50 |
+| anthropic | dense | none | **5.00** | 4.85 | **5.00** | **1.00** | 0.36 | 27/50 |
+| anthropic | hybrid | llm | **5.00** | **5.00** | **5.00** | 0.88 | 0.17 | 36/50 |
+| anthropic | hybrid | none | **5.00** | **5.00** | **5.00** | **1.00** | 0.26 | 31/50 |
+| google | bm25 | none | 4.70 | 4.57 | 4.70 | **1.00** | 0.45 | 23/50 |
+| google | dense | none | 4.72 | 4.60 | 4.68 | **1.00** | 0.40 | 25/50 |
+| google | hybrid | llm | 4.79 | 4.56 | 4.76 | **1.00** | 0.19 | 34/50 |
+| google | hybrid | none | 4.72 | 4.59 | 4.79 | **1.00** | 0.31 | 29/50 |
+| ollama | bm25 | none | 3.16 | 3.33 | 3.36 | 0.62 | **0.00** | 45/50 |
+| ollama | dense | none | 3.05 | 3.24 | 3.29 | 0.88 | 0.02 | 42/50 |
+| ollama | hybrid | llm | 2.80 | 3.17 | 2.88 | 0.75 | 0.10 | 40/50 |
+| ollama | hybrid | none | 2.98 | 3.41 | 3.00 | 0.88 | 0.05 | 41/50 |
+
+| Provider | Mode | Rerank | Latency mean (s) | p50 | p95 | Gen tokens in/out | Gen cost | Judge cost |
+|----------|------|--------|------------------|-----|-----|-------------------|----------|------------|
+| anthropic | bm25 | none | 9.22 | 5.92 | 34.98 | 218058 / 8298 | $0.78 | $0.10 |
+| anthropic | dense | none | 9.25 | 7.08 | 28.49 | 213978 / 9769 | $0.79 | $0.11 |
+| anthropic | hybrid | llm | 20.59 | 19.06 | 46.43 | 306449 / 33356 | $1.42 | $0.16 |
+| anthropic | hybrid | none | 10.86 | 7.08 | 28.25 | 220659 / 11112 | $0.83 | $0.15 |
+| google | bm25 | none | 1.47 | 1.28 | 2.47 | 205902 / 4067 | $0.35 | $0.24 |
+| google | dense | none | 1.69 | 1.36 | 3.98 | 203742 / 4085 | $0.34 | $0.29 |
+| google | hybrid | llm | 7.33 | 4.18 | 6.94 | 297885 / 30269 | $0.72 | $0.36 |
+| google | hybrid | none | 1.55 | 1.41 | 2.54 | 209045 / 4807 | $0.36 | $0.30 |
+| ollama | bm25 | none | 4.36 | 3.12 | 10.35 | 160513 / 6102 | $0.00 | $0.41 |
+| ollama | dense | none | 2.61 | 2.31 | 4.80 | 152562 / 4952 | $0.00 | $0.43 |
+| ollama | hybrid | llm | 10.35 | 9.25 | 19.69 | 245252 / 19084 | $0.00 | $0.37 |
+| ollama | hybrid | none | 2.49 | 2.26 | 4.92 | 155474 / 5092 | $0.00 | $0.41 |
+
+Refusal correctness is reported separately from the 1-5 rubric means and is never averaged into them. Judge failures (n): listed per config when nonzero.
+
+### Analysis
+
+**Read the judge column before the score columns.** Per ADR-006 an answer is never scored
+by the provider that generated it, so the anthropic rows are scored by gemini-3.5-flash and
+the ollama/google rows by claude-sonnet-4-6. Both judges pass calibration on all three
+rubrics with `judge.v2` (κ 0.68–0.93 vs independent labels; see `docs/judge-calibration.md`
+— note the labels are model-authored, not human), but they are not equally severe: on an
+identical 41-answer overlap slice gemini scored +0.4 to +0.9 higher than sonnet across
+dimensions. The anthropic row's flat 5.00s are partly that leniency. Under a single judge
+(sonnet, self-judging included), google's hybrid answers scored slightly *higher* on
+faithfulness than anthropic's (4.69 vs 4.48) while anthropic led on relevance (4.90 vs
+4.62) — the two cloud providers are close to indistinguishable on answer quality here, and
+this table should not be read as a provider ranking without that caveat. Judge variance is
+a non-issue: two same-judge runs over one config moved aggregates by ≤ 0.024 against the
+±0.2 gate.
+
+**Refusal behavior, not answer quality, is the biggest provider difference.** The two cloud
+models refuse aggressively whenever the retrieved context does not state the answer:
+45% of answerable questions on bm25, falling to 26–31% on hybrid — the false-refusal rate
+tracks retrieval quality almost monotonically, which is what a strictly grounded model
+should do when handed a context that genuinely lacks the answer (the corpus contains it,
+but retrieval did not surface it). llama3.1:8b almost never refuses (0–10%) and pays for it
+on the rubrics: its faithfulness sits near 3 because it answers from weak context and the
+judge finds unsupported claims. The same trade shows up on the unanswerable slice, where
+the cloud models refuse 88–100% correctly versus ollama's 63–88%.
+
+**The "bad" reranker helps end-to-end.** Week 3 showed the llama-based listwise reranker
+*degrades* section-level retrieval metrics, and it was left off by default. End-to-end the
+picture inverts for the cloud providers: hybrid+rerank roughly halves false refusals
+(anthropic 0.26 → 0.17, google 0.31 → 0.19) at equal-or-better rubric scores — reordering
+the 30-candidate pool pulls answer-bearing chunks into the top-8 context often enough to
+matter, even though the ordering it produces looks worse to NDCG@10. The win is not free:
+the local rerank stage adds ~6–10 s latency per question, ollama's own scores drop
+(faithfulness 2.98 → 2.80), and one previously-refused unanswerable slipped through for
+anthropic (refusal correctness 1.00 → 0.875). Note the configs are not context-size-matched
+(rerank cuts to top-8, no-rerank to top-10), so part of the effect may be context length
+rather than ordering.
+
+**Ops.** gemini-3.5-flash is by far the fastest (≈1.5 s mean end-to-end vs ≈9–10 s for
+Bedrock sonnet-4-6 and 2.5–4.4 s for local llama3.1:8b). At current list prices a full
+50-question config costs ≈ $0.78–0.84 to generate with sonnet-4-6 (Bedrock `global.`
+profile) and ≈ $0.35 with gemini-3.5-flash; cross-provider judging adds $0.09–0.45 per
+config depending on the judge and how many answers were refusals (refusals are not judged).
+Provenance for every row: dataset v2, synthesis.v2, judge.v2, per-row judge identity in the
+results JSONL (`evals/results/generation-20260709-200512Z/`).
+
 ## Reproduce
 
 ```bash
