@@ -40,7 +40,12 @@ class Citation:
 
 @dataclass(frozen=True, slots=True)
 class GoldenExample:
-    """One golden question with its reference answer and source citations."""
+    """One golden question with its reference answer and source citations.
+
+    ``held_out`` marks items used verbatim as planner few-shot examples
+    (train/test hygiene): generation evals must exclude them. Retrieval evals
+    keep them — no prompt sees golden questions there.
+    """
 
     id: str
     question: str
@@ -48,6 +53,7 @@ class GoldenExample:
     source_citations: list[Citation]
     difficulty: str
     type: str
+    held_out: bool = False
 
 
 def load_golden(path: Path) -> list[GoldenExample]:
@@ -97,6 +103,7 @@ def load_golden(path: Path) -> list[GoldenExample]:
                         source_citations=citations,
                         difficulty=row["difficulty"],
                         type=row["type"],
+                        held_out=bool(row.get("held_out", False)),
                     )
                 )
             except (json.JSONDecodeError, KeyError, TypeError) as e:
