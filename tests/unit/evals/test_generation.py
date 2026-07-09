@@ -20,6 +20,7 @@ from agentic_rag.evals.generation import (
     RunConfig,
     config_settings,
     estimate_cost,
+    eval_set,
     run_config,
     summarize,
 )
@@ -40,6 +41,7 @@ def golden_examples() -> list[GoldenExample]:
             source_citations=[Citation(doc="doc1", section="sec1")],
             difficulty="easy",
             type="answerable",
+            held_out=False,
         ),
         GoldenExample(
             id="q2",
@@ -48,6 +50,7 @@ def golden_examples() -> list[GoldenExample]:
             source_citations=[],
             difficulty="hard",
             type="unanswerable",
+            held_out=False,
         ),
         GoldenExample(
             id="q3",
@@ -56,6 +59,7 @@ def golden_examples() -> list[GoldenExample]:
             source_citations=[Citation(doc="doc2", section="sec2")],
             difficulty="medium",
             type="answerable",
+            held_out=False,
         ),
     ]
 
@@ -138,7 +142,10 @@ class StubJudgeLLM(LLMProvider):
 def test_run_config_slug() -> None:
     """Test RunConfig slug generation."""
     cfg = RunConfig(provider="anthropic", mode="hybrid", rerank="llm")
-    assert cfg.slug() == "anthropic--hybrid--llm"
+    assert cfg.slug() == "anthropic--hybrid--llm--vanilla"
+
+    cfg_agentic = RunConfig(provider="anthropic", mode="hybrid", rerank="llm", pipeline="agentic")
+    assert cfg_agentic.slug() == "anthropic--hybrid--llm--agentic"
 
 
 def test_config_settings(base_settings: Settings) -> None:
@@ -813,3 +820,380 @@ def test_summarize_sorting() -> None:
         anthropic_modes: list[Any] = [c.get("mode") for c in anthropic_configs]
         sorted_modes = sorted(anthropic_modes)
         assert anthropic_modes == sorted_modes
+
+
+def test_eval_set() -> None:
+    """Test eval_set drops held-out items and preserves order."""
+    golden = [
+        GoldenExample(
+            id="q1",
+            question="q1",
+            reference_answer="a1",
+            source_citations=[],
+            difficulty="easy",
+            type="answerable",
+            held_out=False,
+        ),
+        GoldenExample(
+            id="q2",
+            question="q2",
+            reference_answer="a2",
+            source_citations=[],
+            difficulty="easy",
+            type="answerable",
+            held_out=True,
+        ),
+        GoldenExample(
+            id="q3",
+            question="q3",
+            reference_answer="a3",
+            source_citations=[],
+            difficulty="easy",
+            type="answerable",
+            held_out=False,
+        ),
+    ]
+    result = eval_set(golden)
+    assert len(result) == 2
+    assert result[0].id == "q1"
+    assert result[1].id == "q3"
+
+
+async def test_run_config_agentic_pipeline() -> None:
+    """Test run_config with agentic pipeline builds AgentMeta."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        out_path = Path(tmpdir) / "results.jsonl"
+
+        golden = [
+            GoldenExample(
+                id="q1",
+                question="What is foo?",
+                reference_answer="Foo.",
+                source_citations=[Citation(doc="doc1", section="sec1")],
+                difficulty="easy",
+                type="answerable",
+                held_out=False,
+            ),
+        ]
+
+        chunk = ChunkRecord(
+            chunk_id="c1",
+            doc_id="doc1",
+            section_id="sec1",
+            section_ids=["sec1"],
+            section_path="doc1/sec1",
+            heading="Section 1",
+            page_start=1,
+            page_end=1,
+            token_count=100,
+            text="Text 1",
+        )
+
+        # Build a real AgentAnswer for testing
+        answer = Answer(
+            text="Answer to q1",
+            citations=[CitedChunk(marker=1, chunk=chunk)],
+            context=[ScoredChunk(chunk=chunk, score=0.9, rank=1)],
+            usage=Usage(input_tokens=100, output_tokens=50, cost_usd=0.01),
+            timings=[
+                StageTiming(stage="planner", seconds=0.1),
+                StageTiming(stage="retrieve", seconds=0.2),
+                StageTiming(stage="synthesize", seconds=0.1),
+                StageTiming(stage="critic", seconds=0.1),
+            ],
+            refusal=False,
+            invalid_citations=[],
+        )
+
+        from agentic_rag.agent.state import (
+            AgentAnswer,
+            CriticVerdict,
+            Critique,
+            Plan,
+            PlanKind,
+        )
+
+        agent_answer = AgentAnswer(
+            answer=answer,
+            plan=Plan(kind=PlanKind.MULTI_HOP, sub_queries=("q1a", "q1b")),
+            revisions=1,
+            critiques=(Critique(verdict=CriticVerdict.PASS),),
+            caveat=False,
+            trace=(),
+        )
+
+        class AgenticStubPipeline:
+            async def ask(self, question: str, **kwargs: Any) -> AgentAnswer:
+                return agent_answer
+
+        cfg = RunConfig(provider="ollama", mode="hybrid", rerank="none", pipeline="agentic")
+        settings = Settings()
+
+        await run_config(
+            cfg,
+            golden,
+            settings,
+            out_path,
+            dataset_version="v2",
+            concurrency=1,
+            do_judge=False,
+            _pipeline_factory=lambda s: AgenticStubPipeline(),
+        )
+
+        result = json.loads(out_path.read_text().strip())
+        assert result["pipeline"] == "agentic"
+        assert result["agent"] is not None
+        assert result["agent"]["plan_kind"] == "multi_hop"
+        assert result["agent"]["sub_queries"] == ["q1a", "q1b"]
+        assert result["agent"]["revisions"] == 1
+        assert result["agent"]["caveat"] is False
+
+
+async def test_run_config_agentic_type_check() -> None:
+    """Test run_config fails loud when agentic config returns Answer instead of AgentAnswer."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        out_path = Path(tmpdir) / "results.jsonl"
+
+        golden = [
+            GoldenExample(
+                id="q1",
+                question="What is foo?",
+                reference_answer="Foo.",
+                source_citations=[Citation(doc="doc1", section="sec1")],
+                difficulty="easy",
+                type="answerable",
+                held_out=False,
+            ),
+        ]
+
+        chunk = ChunkRecord(
+            chunk_id="c1",
+            doc_id="doc1",
+            section_id="sec1",
+            section_ids=["sec1"],
+            section_path="doc1/sec1",
+            heading="Section 1",
+            page_start=1,
+            page_end=1,
+            token_count=100,
+            text="Text 1",
+        )
+
+        # Return vanilla Answer for agentic config (should fail)
+        answer = Answer(
+            text="Answer to q1",
+            citations=[CitedChunk(marker=1, chunk=chunk)],
+            context=[ScoredChunk(chunk=chunk, score=0.9, rank=1)],
+            usage=Usage(input_tokens=100, output_tokens=50, cost_usd=0.01),
+            timings=[StageTiming(stage="synthesis", seconds=0.5)],
+            refusal=False,
+            invalid_citations=[],
+        )
+
+        class VanillaStubPipeline:
+            async def ask(self, question: str, **kwargs: Any) -> Answer:
+                return answer
+
+        cfg = RunConfig(provider="ollama", mode="hybrid", rerank="none", pipeline="agentic")
+        settings = Settings()
+
+        with pytest.raises(TypeError, match="Expected AgentAnswer"):
+            await run_config(
+                cfg,
+                golden,
+                settings,
+                out_path,
+                dataset_version="v2",
+                concurrency=1,
+                do_judge=False,
+                _pipeline_factory=lambda s: VanillaStubPipeline(),
+            )
+
+
+def test_estimate_cost_agentic_higher() -> None:
+    """Test that agentic estimate > vanilla estimate for same provider."""
+    settings = Settings(
+        provider="anthropic",
+        anthropic=AnthropicSettings(model="claude-sonnet-5"),
+    )
+
+    cfg_vanilla = RunConfig(provider="anthropic", mode="hybrid", rerank="none", pipeline="vanilla")
+    cfg_agentic = RunConfig(provider="anthropic", mode="hybrid", rerank="none", pipeline="agentic")
+
+    vanilla_estimates = estimate_cost([cfg_vanilla], n_examples=100, settings=settings)
+    agentic_estimates = estimate_cost([cfg_agentic], n_examples=100, settings=settings)
+
+    _, vanilla_cost = vanilla_estimates[0]
+    _, agentic_cost = agentic_estimates[0]
+
+    assert vanilla_cost is not None
+    assert agentic_cost is not None
+    assert agentic_cost > vanilla_cost
+
+
+def test_summarize_by_type(golden_examples: list[GoldenExample]) -> None:
+    """Test summarize computes by_type aggregates correctly."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        results_dir = Path(tmpdir)
+
+        # Create rows with different types
+        rows: list[dict[str, object]] = [
+            {
+                "example_id": "q1",
+                "provider": "ollama",
+                "model": "llama3.1:8b",
+                "mode": "hybrid",
+                "rerank": "none",
+                "pipeline": "vanilla",
+                "synthesis_prompt": "synthesis.v2",
+                "dataset_version": "v2",
+                "answer_text": "Answer to q1",
+                "refusal": False,
+                "cited": [],
+                "invalid_citations": [],
+                "n_context": 3,
+                "gen_usage": {"input_tokens": 100, "output_tokens": 50, "cost_usd": 0.0},
+                "latency_s": {"synthesis": 0.5, "total": 0.5},
+                "judge": {
+                    "judge_provider": "anthropic",
+                    "judge_model": "claude-sonnet-5",
+                    "prompt_id": "judge.v1",
+                    "faithfulness": {"score": 5, "justification": "Perfect"},
+                    "relevance": {"score": 5, "justification": "Perfect"},
+                    "citation_accuracy": {"score": 5, "justification": "Perfect"},
+                    "usage": {"input_tokens": 200, "output_tokens": 100, "cost_usd": 0.001},
+                },
+            },
+            {
+                "example_id": "q2",
+                "provider": "ollama",
+                "model": "llama3.1:8b",
+                "mode": "hybrid",
+                "rerank": "none",
+                "pipeline": "vanilla",
+                "synthesis_prompt": "synthesis.v2",
+                "dataset_version": "v2",
+                "answer_text": "",
+                "refusal": True,
+                "cited": [],
+                "invalid_citations": [],
+                "n_context": 0,
+                "gen_usage": {"input_tokens": 50, "output_tokens": 10, "cost_usd": 0.0},
+                "latency_s": {"synthesis": 0.3, "total": 0.3},
+                "judge": None,
+            },
+        ]
+
+        jsonl_path = results_dir / "ollama--hybrid--none--vanilla.jsonl"
+        with jsonl_path.open("w", encoding="utf-8") as f:
+            for row in rows:
+                f.write(json.dumps(row) + "\n")
+
+        summary = summarize(results_dir, golden_examples)
+        configs = summary["configs"]
+        assert len(configs) == 1
+        cfg = configs[0]
+
+        # Check by_type exists and has entries for types present
+        by_type = cfg.get("by_type", {})
+        assert "answerable" in by_type
+        assert "unanswerable" in by_type
+
+        # answerable has 1 judged row (q1)
+        answerable = by_type["answerable"]
+        assert answerable["n"] == 1
+        assert answerable["n_judged"] == 1
+        assert answerable["scores"]["faithfulness"] == 5.0
+
+        # unanswerable has 1 row (q2, refusal)
+        unanswerable = by_type["unanswerable"]
+        assert unanswerable["n"] == 1
+        assert unanswerable["n_judged"] == 0
+        assert unanswerable["refusal_rate"] == 1.0
+
+
+async def test_summarize_agent_stats(golden_examples: list[GoldenExample]) -> None:
+    """Test summarize computes agent stats for agentic configs."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        results_dir = Path(tmpdir)
+
+        # Create rows with agent metadata
+        rows: list[dict[str, object]] = [
+            {
+                "example_id": "q1",
+                "provider": "ollama",
+                "model": "llama3.1:8b",
+                "mode": "hybrid",
+                "rerank": "none",
+                "pipeline": "agentic",
+                "synthesis_prompt": "agent-synthesis.v1",
+                "dataset_version": "v2",
+                "answer_text": "Answer to q1",
+                "refusal": False,
+                "cited": [],
+                "invalid_citations": [],
+                "n_context": 3,
+                "gen_usage": {"input_tokens": 100, "output_tokens": 50, "cost_usd": 0.0},
+                "latency_s": {
+                    "planner": 0.1,
+                    "retrieve": 0.2,
+                    "synthesize": 0.1,
+                    "critic": 0.1,
+                    "total": 0.5,
+                },
+                "judge": None,
+                "agent": {
+                    "plan_kind": "multi_hop",
+                    "sub_queries": ["q1a", "q1b"],
+                    "revisions": 1,
+                    "caveat": False,
+                },
+            },
+            {
+                "example_id": "q3",
+                "provider": "ollama",
+                "model": "llama3.1:8b",
+                "mode": "hybrid",
+                "rerank": "none",
+                "pipeline": "agentic",
+                "synthesis_prompt": "agent-synthesis.v1",
+                "dataset_version": "v2",
+                "answer_text": "Answer to q3",
+                "refusal": False,
+                "cited": [],
+                "invalid_citations": [],
+                "n_context": 2,
+                "gen_usage": {"input_tokens": 120, "output_tokens": 60, "cost_usd": 0.0},
+                "latency_s": {
+                    "planner": 0.1,
+                    "retrieve": 0.2,
+                    "synthesize": 0.2,
+                    "critic": 0.2,
+                    "total": 0.7,
+                },
+                "judge": None,
+                "agent": {
+                    "plan_kind": "direct",
+                    "sub_queries": ["q3"],
+                    "revisions": 0,
+                    "caveat": False,
+                },
+            },
+        ]
+
+        jsonl_path = results_dir / "ollama--hybrid--none--agentic.jsonl"
+        with jsonl_path.open("w", encoding="utf-8") as f:
+            for row in rows:
+                f.write(json.dumps(row) + "\n")
+
+        summary = summarize(results_dir, golden_examples)
+        configs = summary["configs"]
+        assert len(configs) == 1
+        cfg = configs[0]
+
+        # Check agent stats
+        agent = cfg.get("agent")
+        assert agent is not None
+        assert agent["multi_hop_rate"] == 0.5  # 1 multi_hop out of 2
+        assert agent["mean_revisions"] == 0.5  # (1 + 0) / 2
+        assert agent["caveat_rate"] == 0.0  # 0 caveats out of 2
