@@ -26,6 +26,7 @@ dependencies = [
     "anthropic[bedrock]>=0.40",
     "openai>=1.50",
     "google-genai>=1.0",
+    "langgraph>=1.0",
     "tenacity>=9.0",
     "python-dotenv>=1.0",
     "pymupdf>=1.24",
@@ -73,6 +74,7 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 python_version = "3.12"
 strict = true
 files = [
+    "src/agentic_rag/agent",
     "src/agentic_rag/providers",
     "src/agentic_rag/retrieval",
     "src/agentic_rag/evals",
