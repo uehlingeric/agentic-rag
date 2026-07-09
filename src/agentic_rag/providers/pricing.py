@@ -24,12 +24,19 @@ class ModelPrice:
 # Prices as of 2026-07-04; only models listed on the providers' current pricing
 # pages appear here — cost_for returns None for anything else rather than guessing.
 # Anthropic Sonnet 5 introductory pricing valid through 2026-08-31.
+# Vertex AI global-endpoint pricing for Gemini matches the rates below (verified
+# 2026-07-04; regional endpoints are +10%). Bedrock global.* inference profiles
+# match direct-API rates (verified 2026-07-09 from the Bedrock agreement rate card
+# for claude-sonnet-4-6); us.* regional profiles are +10% and are not listed, so
+# completions on them report cost_usd=None.
 PRICES: dict[str, dict[str, ModelPrice]] = {
     "anthropic": {
         "claude-fable": ModelPrice(10.0, 50.0),
         "claude-opus-4-8": ModelPrice(5.0, 25.0),
         "claude-sonnet-5": ModelPrice(2.0, 10.0),  # Introductory through 2026-08-31
         "claude-haiku-4-5": ModelPrice(1.0, 5.0),
+        # Bedrock global inference profile; rate card matches the direct API.
+        "global.anthropic.claude-sonnet-4-6": ModelPrice(3.0, 15.0),
     },
     "openai": {
         "gpt-5.5": ModelPrice(5.0, 30.0),
