@@ -11,6 +11,7 @@ from agentic_rag.evals.judge import (
     judge_provider_for,
 )
 from agentic_rag.pipeline.base import CitedChunk
+from agentic_rag.prompts import load_prompt
 from agentic_rag.providers.base import Completion, Message, Role, Usage
 from agentic_rag.retrieval.base import ChunkRecord
 
@@ -120,7 +121,7 @@ async def test_judge_happy_path() -> None:
     assert result.citation_accuracy.justification == "All citations are accurate."
     assert result.judge_provider == "test-judge"
     assert result.judge_model == "stub-model"
-    assert result.prompt_id == "judge.v1"
+    assert result.prompt_id == load_prompt("judge").id  # latest version by default
     assert result.usage.input_tokens == 100
     assert result.usage.output_tokens == 50
     assert result.usage.cost_usd == 0.001
