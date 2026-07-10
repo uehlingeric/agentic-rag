@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from agentic_rag.config import Settings
-from agentic_rag.pipeline.base import NO_ANSWER_SENTINEL, Answer, StageTiming
+from agentic_rag.pipeline.base import Answer, StageTiming, scrub_sentinel
 from agentic_rag.pipeline.citations import resolve_citations
 from agentic_rag.pipeline.context import build_context
 from agentic_rag.pipeline.synthesize import stream_synthesis, synthesize
@@ -172,11 +172,9 @@ class RAGPipeline:
                 # Terminal event: post-process and resolve citations
                 elapsed_synthesis = time.perf_counter() - start_synthesis
 
-                text = event.completion.text.lstrip()
-                refusal = text.startswith(NO_ANSWER_SENTINEL)
-                text = text[len(NO_ANSWER_SENTINEL) :].strip() if refusal else text.strip()
+                scrub = scrub_sentinel(event.completion.text)
 
-                citation_result = resolve_citations(text, built.chunks)
+                citation_result = resolve_citations(scrub.text, built.chunks)
 
                 answer = Answer(
                     text=citation_result.text,
@@ -188,7 +186,7 @@ class RAGPipeline:
                         StageTiming("rerank", elapsed_rerank),
                         StageTiming("synthesize", elapsed_synthesis),
                     ],
-                    refusal=refusal,
+                    refusal=scrub.refusal,
                     invalid_citations=citation_result.invalid_markers,
                 )
 

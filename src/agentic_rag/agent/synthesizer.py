@@ -2,8 +2,8 @@
 
 Generates answers from context via LLM, with optional revision loop that
 incorporates critique issues. Handles sentinel detection for refusals (leading
-[NO_ANSWER]) and the week-4 failure mode where a partial answer is followed by
-[NO_ANSWER] (trailing sentinel).
+[NO_ANSWER]) and the week-5 failure mode where the sentinel appears mid-answer
+or trailing.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from agentic_rag.agent.state import Critique
-from agentic_rag.pipeline.base import NO_ANSWER_SENTINEL
+from agentic_rag.pipeline.base import scrub_sentinel
 from agentic_rag.pipeline.context import BuiltContext
 from agentic_rag.prompts import load_prompt
 from agentic_rag.providers.base import LLMProvider, Message, Role, Usage
@@ -21,14 +21,15 @@ from agentic_rag.providers.base import LLMProvider, Message, Role, Usage
 class DraftResult:
     """One synthesis pass.
 
-    ``text`` is sentinel-stripped. ``trailing_sentinel`` records the week-4
-    failure mode (model appends [NO_ANSWER] after a partial answer): the
-    trailing sentinel is stripped WITHOUT marking refusal.
+    ``text`` is sentinel-stripped. ``stray_sentinel`` records the week-5 failure
+    mode (model appends [NO_ANSWER] after a partial answer or inserts it
+    mid-text): any non-leading sentinel occurrence is stripped WITHOUT marking
+    refusal.
     """
 
     text: str
     refusal: bool
-    trailing_sentinel: bool
+    stray_sentinel: bool
     usage: Usage
     model: str
     prompt_id: str
@@ -115,24 +116,12 @@ async def synthesize_draft(
     )
 
     # Post-process: detect and strip sentinels
-    text = completion.text.lstrip()
-
-    # Detect leading sentinel (refusal)
-    refusal = text.startswith(NO_ANSWER_SENTINEL)
-    if refusal:
-        text = text[len(NO_ANSWER_SENTINEL) :].lstrip()
-
-    # Detect trailing sentinel (week-4 failure mode)
-    trailing_sentinel = False
-    text = text.rstrip()
-    if text.endswith(NO_ANSWER_SENTINEL):
-        trailing_sentinel = True
-        text = text[: -len(NO_ANSWER_SENTINEL)].rstrip()
+    scrub = scrub_sentinel(completion.text)
 
     return DraftResult(
-        text=text,
-        refusal=refusal,
-        trailing_sentinel=trailing_sentinel,
+        text=scrub.text,
+        refusal=scrub.refusal,
+        stray_sentinel=scrub.stray_sentinel,
         usage=completion.usage,
         model=completion.model,
         prompt_id=synthesis_prompt.id,
