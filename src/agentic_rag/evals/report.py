@@ -40,6 +40,10 @@ ManifestEntry = Fragment | Table
 # build(generation_summary=...) / build_report.py --generation-summary.
 GENERATION_SUMMARY = Path("evals/results/generation-20260709-200512Z/summary.json")
 
+# The committed week-5 vanilla-vs-agentic run; overridden the same way via
+# build(agentic_summary=...) / build_report.py --agentic-summary.
+AGENTIC_SUMMARY = Path("evals/results/generation-20260710-131027Z/summary.json")
+
 
 def _round_4dp(value: float) -> str:
     """Format a float to 4 decimal places."""
@@ -670,7 +674,12 @@ def render_generation_section(summary_path: Path) -> str:
     return "\n".join(lines)
 
 
-def build(out_path: Path, *, generation_summary: Path | None = None) -> str:
+def build(
+    out_path: Path,
+    *,
+    generation_summary: Path | None = None,
+    agentic_summary: Path | None = None,
+) -> str:
     """Build and write the benchmark report.
 
     Assembles markdown document from fragments and rendered tables.
@@ -680,6 +689,8 @@ def build(out_path: Path, *, generation_summary: Path | None = None) -> str:
         out_path: Output path for the markdown document.
         generation_summary: Path to a generation summary JSON; defaults to the
                             pinned committed run (GENERATION_SUMMARY).
+        agentic_summary: Path to a vanilla-vs-agentic summary JSON; defaults to
+                         the pinned committed run (AGENTIC_SUMMARY).
 
     Returns:
         The assembled markdown document as a string.
@@ -724,6 +735,13 @@ def build(out_path: Path, *, generation_summary: Path | None = None) -> str:
             params={},
         ),
         Fragment(Path("docs/fragments/benchmarks/07-week4-analysis.md")),
+        Fragment(Path("docs/fragments/benchmarks/08-week5-config.md")),
+        Table(
+            kind="agentic",
+            source_path=agentic_summary if agentic_summary is not None else AGENTIC_SUMMARY,
+            params={},
+        ),
+        Fragment(Path("docs/fragments/benchmarks/09-week5-analysis.md")),
         Fragment(Path("docs/fragments/benchmarks/06-reproduce.md")),
     ]
 
@@ -750,6 +768,8 @@ def build(out_path: Path, *, generation_summary: Path | None = None) -> str:
                 )
             elif entry.kind == "generation":
                 table_text = render_generation_section(entry.source_path)
+            elif entry.kind == "agentic":
+                table_text = render_agentic_comparison(entry.source_path)
             else:
                 raise ValueError(f"Unknown table kind: {entry.kind}")
 

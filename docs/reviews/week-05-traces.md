@@ -86,3 +86,71 @@ until cloud traces show whether it reproduces beyond 8B.
 | Critic verdicts justified | Verdicts recorded per trace; lenient at 8B (2 flawed drafts passed); fail-open observed once |
 | Revision cap proven | By test (adversarial fixture, exactly 2 revisions) and live (AC-10 run finalized with caveat) |
 | Trace dumps complete | Every node's input/output present for all 5 requests |
+
+---
+
+# Cloud Traces: Same Five Questions on sonnet-4-6 and gemini-3.5-flash
+
+**Date:** 2026-07-10, accompanying benchmark run `generation-20260710-131027Z`.
+**Config:** identical to the ollama runs above; providers claude-sonnet-4-6 (Bedrock
+`global.` profile) and gemini-3.5-flash (Vertex, global endpoint). 10 traced requests,
+$0.82 total. Each trace reviewed by hand as above.
+
+## Headline
+
+All three deferred 8B findings are now resolved, one in the unexpected direction. Few-shot
+anchoring: **8B-only** — neither cloud planner copied AC-2 into v1-q24. Critic leniency:
+**8B-only** — sonnet's critic revised 3 of 5 initial drafts with substantive, typed
+citation-grounding issues. Mid-answer `[NO_ANSWER]`: **not 8B-only** — it reproduced on
+both cloud providers in the benchmark rows, including once in the *vanilla* pipeline, so
+the fix belongs in shared synthesis post-processing (week 6), not the agent path.
+
+## Plans: 10/10 well-formed, zero parse fallbacks
+
+Both providers classified all five questions `multi_hop` with two sub-queries each. Sonnet's
+sub-queries adapt to the question — v1-q24 became *"SP 800-53 Revision 5 security controls
+for protecting AI system resources such as SR and SA control families"*, exactly the
+generalization llama3.1:8b failed to make; planner.v1's few-shot anchoring is an 8B
+capability floor, not a prompt defect, so planner.v2's few-shot diversification is
+deprioritized. Gemini's sub-queries are terser and once under-specified: its v1-q24
+sub-query 2 dropped the AI framing entirely (*"...protecting system and information
+resources"*), retrieval came back generic, and the synthesizer refused — consistent with
+gemini refusing v1-q24 in both benchmark configs.
+
+## Critic: engaged at cloud scale, and a new behavior — revision to refusal
+
+Sonnet's critic issued `revise` on 3 of 5 initial drafts, every issue a concrete grounding
+defect (`unsupported_citation`, `uncited_claim`, `incomplete`), with monotonic convergence:
+v1-q23 went 2 issues → 1 → pass across exactly the bounded revisions; v1-q24 cleared its
+two issues in one revision. v1-q25 is the interesting one: after two substantive revise
+verdicts the third synthesis produced a *refusal* draft — under critic pressure the model
+concluded its context (the known FIPS-glossary retrieval gap) could not ground the asked-for
+relationship and chose honest refusal over an unsupported answer; the critic is then
+skipped by design (`refusal draft`). Gemini's critic passed every answered draft with zero
+revisions, matching its benchmark mean of 0.02 — critic pass-rates remain per-provider
+reads, never pooled.
+
+## Sentinel misuse: cross-provider, cross-pipeline, always partial answers
+
+The traces themselves are sentinel-clean, but the benchmark rows are not: sonnet (agentic,
+v2-q44) and gemini (**vanilla**, v1-q18) both emitted mid-answer `[NO_ANSWER]` in exactly
+the ollama v2-q43 pattern — answer the supported part, emit the sentinel, explain the
+unsupported part. It appears precisely on partial-answer items, which suggests treating any
+non-leading sentinel occurrence as a partial-refusal signal and stripping it in shared
+post-processing. Promoted from "deferred pending cloud reproduction" to a week-6 work item.
+
+## Run-to-run variance caveat
+
+anthropic v1-q25 was an honestly-caveated partial answer in the benchmark run but a refusal
+in this trace run — same config, same context budget. Single-question refusal behavior is a
+tendency, not a constant; the benchmark's aggregate refusal rates are the meaningful unit.
+
+## Verification checklist (cloud)
+
+| Check | Result |
+|---|---|
+| Plans sensible | 10/10; no parse fallbacks; no few-shot anchoring on either provider |
+| Critic verdicts justified | sonnet: 3/5 revised, all issues substantive, 1 revision-to-refusal; gemini: 0 revisions (per-provider read) |
+| Sentinel variant reproduced? | Yes — benchmark rows v2-q44 (sonnet agentic), v1-q18 (gemini vanilla); week-6 fix in shared post-processing |
+| Revision cap respected | Max 2 revisions observed (v1-q23, v1-q25); no caveat flags |
+| Trace dumps complete | Every node's input/output present for all 10 requests |

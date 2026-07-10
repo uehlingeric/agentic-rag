@@ -381,6 +381,15 @@ class TestBuild:
         assert out_file.exists()
         assert out_file.read_text() == doc
 
+    def test_build_includes_agentic_section(self, tmp_path: Path) -> None:
+        """The manifest renders the week-5 fragments and agentic comparison."""
+        doc = build(tmp_path / "output.md")
+
+        assert "## Week 5 — Vanilla vs. agentic pipeline" in doc
+        assert "## Agentic vs. Vanilla Comparison" in doc
+        # Week-5 sections sit between week-4 analysis and Reproduce
+        assert doc.index("## Agentic vs. Vanilla Comparison") < doc.index("## Reproduce")
+
 
 class TestRenderGenerationSection:
     """Test generation section rendering."""
