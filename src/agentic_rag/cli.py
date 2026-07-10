@@ -5,10 +5,14 @@ modules stay inside command bodies to keep CLI startup fast."""
 from __future__ import annotations
 
 import asyncio
+from typing import TYPE_CHECKING, cast
 
 import typer
 
 import agentic_rag
+
+if TYPE_CHECKING:
+    from agentic_rag.guardrails.guarded import GuardedResult
 
 app = typer.Typer(
     name="agentic-rag",
@@ -86,6 +90,11 @@ def ask(
     trace: bool = typer.Option(
         False, "--trace", help="With --agentic: dump every graph node's input/output as JSON."
     ),
+    no_guardrails: bool = typer.Option(
+        False,
+        "--no-guardrails",
+        help="Bypass guardrails and audit logging (benchmarking escape hatch).",
+    ),
 ) -> None:
     """Answer a question from the corpus with inline citations."""
     import json
@@ -134,14 +143,20 @@ def ask(
     pipeline = RAGPipeline(retriever, reranker, llm, settings)
     retrieval_mode = RetrievalMode(mode)
 
-    def _record(answer: Answer) -> dict[str, object]:
-        return {
+    def _record(
+        answer: Answer,
+        *,
+        request_id: str | None = None,
+        guardrails: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        record = {
             "question": question,
             "provider": llm.name,
             "mode": retrieval_mode.value,
             "rerank": reranker.name,
             "answer": answer.text,
             "refusal": answer.refusal,
+            "refusal_reason": answer.refusal_reason,
             "citations": [
                 {
                     "marker": c.marker,
@@ -161,6 +176,46 @@ def ask(
             },
             "timings": {t.stage: t.seconds for t in answer.timings},
         }
+        if request_id is not None:
+            record["request_id"] = request_id
+        if guardrails is not None:
+            record["guardrails"] = guardrails
+        return record
+
+    def _guardrails_json(result: object) -> dict[str, object]:
+        """Serialize a GuardedResult's verdicts for --json output."""
+        from agentic_rag.guardrails.audit import ScanSummary
+
+        res = cast("GuardedResult", result)
+        return {
+            "input": ScanSummary(res.input_verdict.applied, res.input_verdict.blocked).to_json(),
+            "output": (
+                ScanSummary(res.output_verdict.applied, res.output_verdict.blocked).to_json()
+                if res.output_verdict is not None
+                else None
+            ),
+            "retrieved_flagged_chunk_ids": list(res.retrieved_flagged_chunk_ids),
+        }
+
+    def _guardrail_notices(result: object) -> None:
+        """Print redaction counts, request id, and audit path to stderr."""
+        res = cast("GuardedResult", result)
+        input_redacted = sum(1 for a in res.input_verdict.applied if a.action.value == "redact")
+        output_redacted = (
+            sum(1 for a in res.output_verdict.applied if a.action.value == "redact")
+            if res.output_verdict
+            else 0
+        )
+        if input_redacted or output_redacted:
+            typer.secho(
+                f"guardrails: redacted {input_redacted} input / {output_redacted} output "
+                "detection(s)",
+                fg="bright_black",
+                err=True,
+            )
+        typer.secho(f"[request {res.request_id}]", fg="bright_black", err=True)
+        if res.audit_path:
+            typer.secho(f"[audit {res.audit_path}]", fg="bright_black", err=True)
 
     def _footer(answer: Answer) -> None:
         if answer.citations:
@@ -184,70 +239,160 @@ def ask(
         from agentic_rag.agent.state import trace_to_json
 
         agent_pipeline = AgenticPipeline(retriever, reranker, llm, settings)
-        result = await agent_pipeline.ask(question, mode=retrieval_mode)
-        answer = result.answer
+
+        use_guardrails = settings.guardrails.enabled and not no_guardrails
+        if use_guardrails:
+            from agentic_rag.guardrails.guarded import GuardedPipeline, provider_model
+
+            guarded = GuardedPipeline(
+                agent_pipeline,
+                settings,
+                provider=llm.name,
+                model=provider_model(llm.name, settings),
+            )
+            result = await guarded.ask(question, mode=retrieval_mode)
+            answer = result.answer
+            agent_meta_obj = result.agent
+            request_id = result.request_id
+            guardrails_data = _guardrails_json(result)
+        else:
+            result = await agent_pipeline.ask(question, mode=retrieval_mode)
+            answer = result.answer
+            agent_meta_obj = result
+            request_id = None
+            guardrails_data = None
 
         agent_meta: dict[str, object] = {
-            "plan": result.plan.kind.value,
-            "sub_queries": list(result.plan.sub_queries),
-            "revisions": result.revisions,
-            "caveat": result.caveat,
+            "plan": agent_meta_obj.plan.kind.value,
+            "sub_queries": list(agent_meta_obj.plan.sub_queries),
+            "revisions": agent_meta_obj.revisions,
+            "caveat": agent_meta_obj.caveat,
         }
         if json_out:
-            record = _record(answer)
+            record = _record(answer, request_id=request_id, guardrails=guardrails_data)
             record["pipeline"] = "agentic"
             record["agent"] = agent_meta
             if trace:
-                record["trace"] = trace_to_json(result.trace)
+                record["trace"] = trace_to_json(agent_meta_obj.trace)
             typer.echo(json.dumps(record, indent=2))
             return
-        if answer.refusal:
+
+        # Print answer
+        if answer.refusal_reason in ("input_pii", "input_injection", "output_pii"):
+            typer.secho(answer.text, fg="yellow")
+        elif answer.refusal:
             msg = "Not found in corpus." + (f" {answer.text}" if answer.text else "")
             typer.secho(msg, fg="yellow")
         else:
             typer.echo(answer.text)
-        if result.caveat:
+
+        if agent_meta_obj.caveat:
             typer.secho(
                 "warning: revision cap reached with unresolved critique — answer may be incomplete",
                 fg="yellow",
                 err=True,
             )
+
+        # Print guardrails notices
+        if use_guardrails:
+            _guardrail_notices(result)
+
         _footer(answer)
-        typer.secho(
-            f"[plan {result.plan.kind.value} | {len(result.plan.sub_queries)} sub-queries | "
-            f"{result.revisions} revisions]",
-            fg="bright_black",
-            err=True,
+        plan_msg = (
+            f"[plan {agent_meta_obj.plan.kind.value} | "
+            f"{len(agent_meta_obj.plan.sub_queries)} sub-queries | "
+            f"{agent_meta_obj.revisions} revisions]"
         )
+        typer.secho(plan_msg, fg="bright_black", err=True)
         if trace:
-            typer.echo(json.dumps(trace_to_json(result.trace), indent=2))
+            typer.echo(json.dumps(trace_to_json(agent_meta_obj.trace), indent=2))
 
     async def _run() -> None:
         if agentic:
             await _run_agentic()
         elif stream:
-            final: Answer | None = None
-            async for event in pipeline.ask_stream(question, mode=retrieval_mode):
-                if event.answer is not None:
-                    final = event.answer
-                else:
-                    typer.echo(event.delta, nl=False)
-            typer.echo()
-            if final is None:
-                return
-            if final.refusal:
-                typer.secho("Not found in corpus.", fg="yellow")
+            use_guardrails = settings.guardrails.enabled and not no_guardrails
+            if use_guardrails:
+                from agentic_rag.guardrails.guarded import GuardedPipeline, provider_model
+
+                guarded = GuardedPipeline(
+                    pipeline, settings, provider=llm.name, model=provider_model(llm.name, settings)
+                )
+                final_result = None
+                input_blocked = False
+                output_acted = False
+                async for event in guarded.ask_stream(question, mode=retrieval_mode):
+                    if event.result is not None:
+                        final_result = event.result
+                        input_blocked = event.result.input_verdict.blocked
+                        output_acted = bool(
+                            event.result.output_verdict and event.result.output_verdict.applied
+                        )
+                    elif not input_blocked:
+                        typer.echo(event.delta, nl=False)
+                typer.echo()
+                if final_result is None:
+                    return
+                final = final_result.answer
+                if final.refusal_reason in ("input_pii", "input_injection", "output_pii"):
+                    typer.secho(final.text, fg="yellow")
+                elif final.refusal:
+                    typer.secho("Not found in corpus.", fg="yellow")
+                if output_acted:
+                    typer.secho(
+                        "guardrails: output guardrail acted after streaming; "
+                        "final stored answer differs",
+                        fg="bright_black",
+                        err=True,
+                    )
+                _guardrail_notices(final_result)
+            else:
+                final: Answer | None = None
+                async for event in pipeline.ask_stream(question, mode=retrieval_mode):
+                    if event.answer is not None:
+                        final = event.answer
+                    else:
+                        typer.echo(event.delta, nl=False)
+                typer.echo()
+                if final is None:
+                    return
+                if final.refusal:
+                    typer.secho("Not found in corpus.", fg="yellow")
+
             _footer(final)
         else:
-            answer = await pipeline.ask(question, mode=retrieval_mode)
+            use_guardrails = settings.guardrails.enabled and not no_guardrails
+            if use_guardrails:
+                from agentic_rag.guardrails.guarded import GuardedPipeline, provider_model
+
+                guarded = GuardedPipeline(
+                    pipeline, settings, provider=llm.name, model=provider_model(llm.name, settings)
+                )
+                result = await guarded.ask(question, mode=retrieval_mode)
+                answer = result.answer
+                request_id = result.request_id
+                guardrails_data = _guardrails_json(result)
+            else:
+                answer = await pipeline.ask(question, mode=retrieval_mode)
+                request_id = None
+                guardrails_data = None
+
             if json_out:
-                typer.echo(json.dumps(_record(answer), indent=2))
+                record = _record(answer, request_id=request_id, guardrails=guardrails_data)
+                typer.echo(json.dumps(record, indent=2))
                 return
-            if answer.refusal:
+
+            if answer.refusal_reason in ("input_pii", "input_injection", "output_pii"):
+                typer.secho(answer.text, fg="yellow")
+            elif answer.refusal:
                 msg = "Not found in corpus." + (f" {answer.text}" if answer.text else "")
                 typer.secho(msg, fg="yellow")
             else:
                 typer.echo(answer.text)
+
+            if use_guardrails:
+                _guardrail_notices(result)
+
             _footer(answer)
 
     asyncio.run(_run())

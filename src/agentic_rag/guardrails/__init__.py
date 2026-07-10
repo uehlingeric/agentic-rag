@@ -15,11 +15,19 @@ from agentic_rag.guardrails.base import (
     Verdict,
     redact,
 )
+from agentic_rag.guardrails.guarded import (
+    GuardedPipeline,
+    GuardedResult,
+    GuardedStreamEvent,
+)
 
 __all__ = [
     "Action",
     "AppliedDetection",
     "Detection",
+    "GuardedPipeline",
+    "GuardedResult",
+    "GuardedStreamEvent",
     "InjectionCategory",
     "PIIEntity",
     "RefusalReason",
