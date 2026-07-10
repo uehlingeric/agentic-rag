@@ -346,7 +346,7 @@ async def test_prompt_id_is_agent_synthesis() -> None:
         context=context,
     )
 
-    assert result.prompt_id == "agent-synthesis.v1"
+    assert result.prompt_id == "agent-synthesis.v2"
 
 
 @pytest.mark.asyncio
