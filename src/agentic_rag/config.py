@@ -168,6 +168,18 @@ class MetricsSettings(BaseModel):
     db_path: Path | None = None
 
 
+class ApiSettings(BaseModel):
+    """FastAPI service configuration.
+
+    Static bearer token (no user accounts — reference system). Serve refuses
+    to start when token is unset. Rate limiting is per-token via slowapi.
+    Set via AGENTIC_RAG_API__TOKEN environment variable.
+    """
+
+    token: str | None = None
+    rate_limit: str = "60/minute"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="AGENTIC_RAG_",
@@ -192,6 +204,7 @@ class Settings(BaseSettings):
     retry: RetrySettings = RetrySettings()
     observability: ObservabilitySettings = ObservabilitySettings()
     metrics: MetricsSettings = MetricsSettings()
+    api: ApiSettings = ApiSettings()
     data_dir: Path = Path("data")
 
     @classmethod
