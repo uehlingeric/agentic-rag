@@ -26,4 +26,10 @@ chunking:
   target_tokens: 512
   overlap_tokens: 64
 
+# guardrails:                    # on by default; guardrails.yaml is the reference policy
+#   enabled: false               # escape hatch; CLI --no-guardrails does this per-call
+#   policy_file: guardrails.yaml # override the built-in conservative policy
+#   ner: true                    # spaCy NER layer ([guardrails-ner] extra + en_core_web_sm)
+#   log_raw_query: true          # audit raw queries, not just their SHA-256
+
 data_dir: data
