@@ -85,6 +85,21 @@ class SynthesisSettings(BaseModel):
     max_answer_tokens: int = 1024
 
 
+class AgentSettings(BaseModel):
+    """Agentic loop bounds (ADR-007). ``max_revisions`` caps critic-triggered
+    rewrites before the answer is finalized with a caveat; ``max_sub_queries``
+    caps planner decomposition. Prompt version pins mirror ``JudgeSettings`` so
+    benchmark rows stay attributable to exact prompt text."""
+
+    max_revisions: int = 2
+    max_sub_queries: int = 4
+    planner_prompt_version: int | None = None
+    critic_prompt_version: int | None = None
+    synthesis_prompt_version: int | None = None
+    planner_max_tokens: int = 512
+    critic_max_tokens: int = 1024
+
+
 class JudgeSettings(BaseModel):
     """LLM-as-judge scoring (ADR-006). An answer is scored by the first entry in
     ``providers`` that differs from the provider that generated it, so headline
@@ -120,6 +135,7 @@ class Settings(BaseSettings):
     retrieval: RetrievalSettings = RetrievalSettings()
     rerank: RerankSettings = RerankSettings()
     synthesis: SynthesisSettings = SynthesisSettings()
+    agent: AgentSettings = AgentSettings()
     judge: JudgeSettings = JudgeSettings()
     retry: RetrySettings = RetrySettings()
     data_dir: Path = Path("data")

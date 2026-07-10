@@ -28,6 +28,12 @@ EST_GEN_INPUT = 6500  # synthesis.max_context_tokens (6000) + 500 buffer
 EST_GEN_OUTPUT = 300
 EST_JUDGE_INPUT = 2500
 EST_JUDGE_OUTPUT = 250
+# Agentic loop cost estimation (pre-run gate heuristics)
+EST_PLANNER_INPUT = 1200  # planner few-shot prompt + question
+EST_PLANNER_OUTPUT = 80
+EST_CRITIC_INPUT = 7000  # context + draft + rubric
+EST_CRITIC_OUTPUT = 300
+EST_AVG_REVISIONS = 1  # mid-point of the 0..max_revisions=2 cap
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,10 +43,11 @@ class RunConfig:
     provider: str
     mode: str
     rerank: str
+    pipeline: str = "vanilla"
 
     def slug(self) -> str:
-        """Return identifier slug for this config (provider--mode--rerank)."""
-        return f"{self.provider}--{self.mode}--{self.rerank}"
+        """Return identifier slug for this config."""
+        return f"{self.provider}--{self.mode}--{self.rerank}--{self.pipeline}"
 
 
 def config_settings(base: Settings, cfg: RunConfig) -> Settings:
@@ -51,6 +58,11 @@ def config_settings(base: Settings, cfg: RunConfig) -> Settings:
             "rerank": base.rerank.model_copy(update={"mode": cfg.rerank}),
         }
     )
+
+
+def eval_set(golden: list[GoldenExample]) -> list[GoldenExample]:
+    """Drop held-out items (planner few-shot examples) from generation evals."""
+    return [ex for ex in golden if not ex.held_out]
 
 
 def _get_provider_model(provider: str, settings: Settings) -> str:
@@ -111,7 +123,6 @@ async def run_config(
     if _pipeline_factory is not None:
         pipeline = _pipeline_factory(cfg_settings)
     else:
-        from agentic_rag.pipeline.pipeline import RAGPipeline
         from agentic_rag.rerank.cross_encoder import CrossEncoderReranker
         from agentic_rag.rerank.llm import LLMReranker
 
@@ -132,7 +143,15 @@ async def run_config(
             reranker = CrossEncoderReranker(model=cfg_settings.rerank.model)
         else:
             raise ValueError(f"Unknown rerank mode: {cfg.rerank}")
-        pipeline = RAGPipeline(retriever, reranker, llm, cfg_settings)
+
+        if cfg.pipeline == "agentic":
+            from agentic_rag.agent.graph import AgenticPipeline
+
+            pipeline = AgenticPipeline(retriever, reranker, llm, cfg_settings)
+        else:
+            from agentic_rag.pipeline.pipeline import RAGPipeline
+
+            pipeline = RAGPipeline(retriever, reranker, llm, cfg_settings)
 
     # Build judge LLM if needed
     judge_llm = None
@@ -140,10 +159,13 @@ async def run_config(
         judge_provider = judge_provider_for(cfg.provider, cfg_settings.judge.providers)
         judge_llm = get_llm_provider(judge_provider, cfg_settings)
 
-    # Get synthesis prompt id
+    # Get synthesis prompt id based on pipeline
     from agentic_rag.prompts import load_prompt
 
-    synthesis_prompt = load_prompt("synthesis", version=None)
+    if cfg.pipeline == "agentic":
+        synthesis_prompt = load_prompt("agent-synthesis", version=None)
+    else:
+        synthesis_prompt = load_prompt("synthesis", version=None)
     synthesis_prompt_id = synthesis_prompt.id
 
     # Get provider model
@@ -163,7 +185,31 @@ async def run_config(
         async with semaphore:
             try:
                 # Run synthesis
-                answer = await pipeline.ask(example.question, mode=retrieval_mode)
+                result = await pipeline.ask(example.question, mode=retrieval_mode)
+
+                # Extract answer and agent metadata based on pipeline
+                if cfg.pipeline == "agentic":
+                    from agentic_rag.agent.state import AgentAnswer
+                    from agentic_rag.evals.records import AgentMeta
+
+                    if not isinstance(result, AgentAnswer):
+                        raise TypeError(
+                            f"Expected AgentAnswer for agentic pipeline, got {type(result)}"
+                        )
+                    answer = result.answer
+                    agent_meta = AgentMeta(
+                        plan_kind=result.plan.kind.value,
+                        sub_queries=list(result.plan.sub_queries),
+                        revisions=result.revisions,
+                        caveat=result.caveat,
+                    )
+                else:
+                    from agentic_rag.pipeline.base import Answer
+
+                    if not isinstance(result, Answer):
+                        raise TypeError(f"Expected Answer for vanilla pipeline, got {type(result)}")
+                    answer = result
+                    agent_meta = None
 
                 # Build cited refs
                 cited_refs = [
@@ -207,6 +253,7 @@ async def run_config(
                     model=provider_model,
                     mode=cfg.mode,
                     rerank=cfg.rerank,
+                    pipeline=cfg.pipeline,
                     synthesis_prompt=synthesis_prompt_id,
                     answer_text=answer.text,
                     refusal=answer.refusal,
@@ -216,6 +263,7 @@ async def run_config(
                     gen_usage=answer.usage,
                     latency_s=latency_s,
                     judge=judge_scores,
+                    agent=agent_meta,
                 )
 
                 # Write row
@@ -238,7 +286,9 @@ def estimate_cost(
     """Estimate cost for each config: generation + judging (if judge available).
 
     Uses heuristics:
-    - Generation: EST_GEN_INPUT + EST_GEN_OUTPUT tokens per example
+    - Vanilla generation: EST_GEN_INPUT + EST_GEN_OUTPUT tokens per example
+    - Agentic generation: planner + (1 + EST_AVG_REVISIONS) x synthesis +
+      (1 + EST_AVG_REVISIONS) x critic
     - Judging: EST_JUDGE_INPUT + EST_JUDGE_OUTPUT tokens per answered example
 
     Ollama always costs 0.0. Unknown models return None (unpriceable).
@@ -249,11 +299,39 @@ def estimate_cost(
 
         # Get generation provider model
         gen_model = _get_provider_model(cfg.provider, cfg_settings)
-        gen_cost = cost_for(cfg.provider, gen_model, EST_GEN_INPUT, EST_GEN_OUTPUT)
-        gen_total = gen_cost * n_examples if gen_cost is not None else None
-        if gen_total is None:  # Unpriceable generation model: whole config is unpriceable
-            results.append((cfg, None))
-            continue
+
+        # Estimate generation tokens based on pipeline
+        if cfg.pipeline == "agentic":
+            # Planner call
+            planner_cost_per = cost_for(
+                cfg.provider, gen_model, EST_PLANNER_INPUT, EST_PLANNER_OUTPUT
+            )
+            if planner_cost_per is None:
+                results.append((cfg, None))
+                continue
+            # Synthesis calls (1 initial + revisions)
+            syn_cost_per = cost_for(cfg.provider, gen_model, EST_GEN_INPUT, EST_GEN_OUTPUT)
+            if syn_cost_per is None:
+                results.append((cfg, None))
+                continue
+            # Critic calls (1 per synthesis, with revisions)
+            critic_cost_per = cost_for(cfg.provider, gen_model, EST_CRITIC_INPUT, EST_CRITIC_OUTPUT)
+            if critic_cost_per is None:
+                results.append((cfg, None))
+                continue
+            gen_cost_per_example = (
+                planner_cost_per
+                + (1 + EST_AVG_REVISIONS) * syn_cost_per
+                + (1 + EST_AVG_REVISIONS) * critic_cost_per
+            )
+        else:
+            gen_cost = cost_for(cfg.provider, gen_model, EST_GEN_INPUT, EST_GEN_OUTPUT)
+            if gen_cost is None:
+                results.append((cfg, None))
+                continue
+            gen_cost_per_example = gen_cost
+
+        gen_total = gen_cost_per_example * n_examples
 
         try:
             judge_provider = judge_provider_for(cfg.provider, cfg_settings.judge.providers)
@@ -301,17 +379,23 @@ def summarize(run_dir: Path, golden: list[GoldenExample]) -> dict[str, object]:
     # Build golden lookup: example_id -> type
     golden_by_id = {ex.id: ex for ex in golden}
 
-    # Group rows by (provider, model, mode, rerank)
-    groups: dict[tuple[str, str, str, str], list[dict[str, Any]]] = {}
+    # Group rows by (provider, model, mode, rerank, pipeline)
+    groups: dict[tuple[str, str, str, str, str], list[dict[str, Any]]] = {}
     for row in all_rows:
-        key = (row["provider"], row["model"], row["mode"], row["rerank"])
+        key = (
+            row["provider"],
+            row["model"],
+            row["mode"],
+            row["rerank"],
+            row.get("pipeline", "vanilla"),
+        )
         if key not in groups:
             groups[key] = []
         groups[key].append(row)
 
     # Build config summaries, sorted for determinism
     config_summaries = []
-    for (provider, model, mode, rerank), rows in sorted(groups.items()):
+    for (provider, model, mode, rerank, pipeline), rows in sorted(groups.items()):
         n_items = len(rows)
         n_judged = sum(1 for r in rows if r["judge"] is not None and not r["refusal"])
         n_refusals = sum(1 for r in rows if r["refusal"])
@@ -392,12 +476,69 @@ def summarize(run_dir: Path, golden: list[GoldenExample]) -> dict[str, object]:
             judge_provider_name = judged_rows[0]["judge"].get("judge_provider")
             judge_model_name = judged_rows[0]["judge"].get("judge_model")
 
+        # Build by_type aggregates: per golden type
+        by_type: dict[str, object] = {}
+        types_in_rows = {
+            golden_by_id[r["example_id"]].type for r in rows if r["example_id"] in golden_by_id
+        }
+        for ex_type in sorted(types_in_rows):
+            rows_of_type = [
+                r
+                for r in rows
+                if r["example_id"] in golden_by_id and golden_by_id[r["example_id"]].type == ex_type
+            ]
+            n_of_type = len(rows_of_type)
+            n_judged_of_type = sum(
+                1 for r in rows_of_type if r["judge"] is not None and not r["refusal"]
+            )
+            scores_of_type: dict[str, float | None] = {
+                "faithfulness": None,
+                "relevance": None,
+                "citation_accuracy": None,
+            }
+            judged_of_type = [r for r in rows_of_type if r["judge"] is not None]
+            if judged_of_type:
+                for dim in ["faithfulness", "relevance", "citation_accuracy"]:
+                    values = [r["judge"][dim]["score"] for r in judged_of_type]
+                    scores_of_type[dim] = round(statistics.mean(values), 4)
+            refused_of_type = sum(1 for r in rows_of_type if r["refusal"])
+            refusal_rate_of_type = refused_of_type / n_of_type if n_of_type > 0 else 0.0
+            by_type[ex_type] = {
+                "n": n_of_type,
+                "n_judged": n_judged_of_type,
+                "scores": scores_of_type,
+                "refusal_rate": round(refusal_rate_of_type, 4),
+            }
+
+        # Build agent aggregates: only for agentic pipelines
+        agent_dict: dict[str, object] | None = None
+        if pipeline == "agentic":
+            rows_with_agent = [r for r in rows if r.get("agent") is not None]
+            if rows_with_agent:
+                multi_hop_count = sum(
+                    1 for r in rows_with_agent if r["agent"].get("plan_kind") == "multi_hop"
+                )
+                revisions_list = [r["agent"]["revisions"] for r in rows_with_agent]
+                caveat_count = sum(1 for r in rows_with_agent if r["agent"].get("caveat"))
+                agent_dict = {
+                    "multi_hop_rate": round(multi_hop_count / len(rows_with_agent), 4)
+                    if rows_with_agent
+                    else 0.0,
+                    "mean_revisions": round(statistics.mean(revisions_list), 4)
+                    if revisions_list
+                    else 0.0,
+                    "caveat_rate": round(caveat_count / len(rows_with_agent), 4)
+                    if rows_with_agent
+                    else 0.0,
+                }
+
         config_summaries.append(
             {
                 "provider": provider,
                 "model": model,
                 "mode": mode,
                 "rerank": rerank,
+                "pipeline": pipeline,
                 "synthesis_prompt": synthesis_prompt,
                 "judge_prompt": judge_prompt,
                 "judge_provider": judge_provider_name,
@@ -419,6 +560,8 @@ def summarize(run_dir: Path, golden: list[GoldenExample]) -> dict[str, object]:
                 "judge_cost_usd": (
                     round(judge_cost_total, 4) if judge_cost_total is not None else None
                 ),
+                "by_type": by_type,
+                "agent": agent_dict,
             }
         )
 

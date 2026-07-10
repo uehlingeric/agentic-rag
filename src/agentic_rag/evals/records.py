@@ -7,6 +7,10 @@ Excerpt text is not stored — cited chunk ids resolve against the corpus
 (``data/corpus/chunks.jsonl``), whose build is byte-reproducible, keeping
 result files small. Readers (aggregation, report, re-judge) consume the raw
 JSON dicts; only writers construct these dataclasses.
+
+Field inventory (per-row): example_id, dataset_version, provider, model, mode,
+rerank, pipeline, synthesis_prompt, answer_text, refusal, cited, invalid_citations,
+n_context, gen_usage, latency_s, judge, agent.
 """
 
 from __future__ import annotations
@@ -15,6 +19,17 @@ from dataclasses import dataclass
 
 from agentic_rag.evals.judge import JudgeScores
 from agentic_rag.providers.base import Usage
+
+
+@dataclass(frozen=True, slots=True)
+class AgentMeta:
+    """Agentic-loop row metadata. ``caveat`` means the revision cap was hit
+    while the critic still said revise."""
+
+    plan_kind: str  # "direct" | "multi_hop"
+    sub_queries: list[str]
+    revisions: int
+    caveat: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +49,10 @@ class GenerationRecord:
     ``judge`` is None when the answer was a refusal (refusals are scored as
     refusal correctness, not on the rubrics) or when judging is deferred.
     ``latency_s`` maps pipeline stage name -> wall-clock seconds.
+    ``agent`` is None for vanilla rows.
+    Agentic rows' latency_s stages are planner/retrieve/synthesize/critic
+    (rerank time folds into retrieve inside gather); vanilla rows keep
+    retrieve/rerank/synthesize.
     """
 
     example_id: str
@@ -42,6 +61,7 @@ class GenerationRecord:
     model: str
     mode: str
     rerank: str
+    pipeline: str
     synthesis_prompt: str
     answer_text: str
     refusal: bool
@@ -51,6 +71,7 @@ class GenerationRecord:
     gen_usage: Usage
     latency_s: dict[str, float]
     judge: JudgeScores | None
+    agent: AgentMeta | None
 
 
 def usage_to_json(usage: Usage) -> dict[str, object]:
@@ -90,6 +111,7 @@ def record_to_json(record: GenerationRecord) -> dict[str, object]:
         "model": record.model,
         "mode": record.mode,
         "rerank": record.rerank,
+        "pipeline": record.pipeline,
         "synthesis_prompt": record.synthesis_prompt,
         "answer_text": record.answer_text,
         "refusal": record.refusal,
@@ -102,4 +124,12 @@ def record_to_json(record: GenerationRecord) -> dict[str, object]:
         "gen_usage": usage_to_json(record.gen_usage),
         "latency_s": record.latency_s,
         "judge": judge_to_json(record.judge) if record.judge is not None else None,
+        "agent": {
+            "plan_kind": record.agent.plan_kind,
+            "sub_queries": record.agent.sub_queries,
+            "revisions": record.agent.revisions,
+            "caveat": record.agent.caveat,
+        }
+        if record.agent is not None
+        else None,
     }
