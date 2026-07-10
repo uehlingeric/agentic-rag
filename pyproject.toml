@@ -34,6 +34,9 @@ dependencies = [
     "faiss-cpu>=1.9",
     "numpy>=1.26",
     "pyarrow>=17",
+    "opentelemetry-api>=1.27",
+    "opentelemetry-sdk>=1.27",
+    "opentelemetry-exporter-otlp-proto-http>=1.27",
 ]
 
 [project.optional-dependencies]
@@ -85,6 +88,7 @@ files = [
     "src/agentic_rag/rerank",
     "src/agentic_rag/pipeline",
     "src/agentic_rag/prompts",
+    "src/agentic_rag/observability",
     "src/agentic_rag/config.py",
 ]
 

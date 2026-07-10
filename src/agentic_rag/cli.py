@@ -100,12 +100,16 @@ def ask(
     import json
 
     from agentic_rag.config import get_settings
+    from agentic_rag.observability import setup_tracing
     from agentic_rag.pipeline.base import Answer
     from agentic_rag.pipeline.pipeline import RAGPipeline
     from agentic_rag.providers.registry import get_embedding_provider, get_llm_provider
     from agentic_rag.rerank.base import NoopReranker, Reranker
     from agentic_rag.retrieval.base import RetrievalMode
     from agentic_rag.retrieval.retriever import Retriever
+
+    settings = get_settings()
+    setup_tracing(settings)
 
     if stream and json_out:
         raise typer.BadParameter("--stream and --json are mutually exclusive.")
@@ -114,7 +118,6 @@ def ask(
     if agentic and stream:
         raise typer.BadParameter("--agentic does not stream (the critic gates the final answer).")
 
-    settings = get_settings()
     llm = get_llm_provider(provider or settings.provider, settings)
 
     rerank_mode = rerank if rerank is not None else settings.rerank.mode
