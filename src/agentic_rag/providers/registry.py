@@ -21,6 +21,7 @@ from agentic_rag.providers.google import GoogleProvider
 from agentic_rag.providers.ollama import OllamaProvider
 from agentic_rag.providers.openai import OpenAIProvider
 from agentic_rag.providers.pricing import cost_for
+from agentic_rag.providers.stub import StubEmbeddingProvider, StubLLMProvider
 
 if TYPE_CHECKING:
     import openai
@@ -38,7 +39,7 @@ def get_llm_provider(name: str, settings: Settings) -> LLMProvider:
     """Get an LLM provider by name.
 
     Args:
-        name: Provider name: anthropic, openai, google, or ollama.
+        name: Provider name: anthropic, openai, google, ollama, or stub.
         settings: Application settings.
 
     Returns:
@@ -55,9 +56,11 @@ def get_llm_provider(name: str, settings: Settings) -> LLMProvider:
         return GoogleProvider(settings)
     elif name == "ollama":
         return OllamaProvider(settings)
+    elif name == "stub":
+        return StubLLMProvider()
     else:
         raise ValueError(
-            f"Unknown LLM provider: {name}. Valid options: anthropic, openai, google, ollama"
+            f"Unknown LLM provider: {name}. Valid options: anthropic, openai, google, ollama, stub"
         )
 
 
@@ -65,7 +68,7 @@ def get_embedding_provider(name: str, settings: Settings) -> EmbeddingProvider:
     """Get an embedding provider by name.
 
     Args:
-        name: Provider name: anthropic, openai, google, or ollama.
+        name: Provider name: openai, google, ollama, or stub.
         settings: Application settings.
 
     Returns:
@@ -77,7 +80,7 @@ def get_embedding_provider(name: str, settings: Settings) -> EmbeddingProvider:
     if name == "anthropic":
         raise ValueError(
             "Anthropic does not offer an embeddings API. "
-            "Choose a different embedding provider (openai, google, ollama)."
+            "Choose a different embedding provider (openai, google, ollama, stub)."
         )
     elif name == "openai":
         return OpenAIEmbeddingProvider(settings)
@@ -85,10 +88,12 @@ def get_embedding_provider(name: str, settings: Settings) -> EmbeddingProvider:
         return GoogleEmbeddingProvider(settings)
     elif name == "ollama":
         return OllamaEmbeddingProvider(settings)
+    elif name == "stub":
+        return StubEmbeddingProvider()
     else:
         raise ValueError(
             f"Unknown embedding provider: {name}. "
-            f"Valid options: openai, google, ollama (not anthropic)"
+            f"Valid options: openai, google, ollama, stub (not anthropic)"
         )
 
 

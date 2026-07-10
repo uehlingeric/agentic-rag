@@ -1,0 +1,99 @@
+# Full local stack: API + Ollama (models pulled on first up) + Jaeger.
+# `docker compose up` on a fresh checkout ends with cited answers at
+# http://localhost:8000/ask — zero cloud dependencies. First boot pulls
+# ~5 GB of Ollama models and ingests the NIST corpus; see `make demo`.
+#
+# Auth token defaults to local-dev-token for the local stack; override with
+# AGENTIC_RAG_API__TOKEN in the environment or an .env file.
+#
+# CI smoke profile (no Ollama, no model pulls, stub provider):
+#   docker compose --profile smoke up api-smoke
+
+services:
+  api:
+    build: .
+    image: agentic-rag:dev
+    ports:
+      - "${AGENTIC_RAG_API_PORT:-8000}:8000"
+    environment:
+      AGENTIC_RAG_API__TOKEN: ${AGENTIC_RAG_API__TOKEN:-local-dev-token}
+      AGENTIC_RAG_PROVIDER: ollama
+      AGENTIC_RAG_OLLAMA__HOST: http://ollama:11434
+      AGENTIC_RAG_EMBEDDING__PROVIDER: ollama
+      AGENTIC_RAG_OBSERVABILITY__ENABLED: "true"
+      AGENTIC_RAG_OBSERVABILITY__EXPORTER: otlp
+      AGENTIC_RAG_OBSERVABILITY__OTLP_ENDPOINT: http://jaeger:4318
+    volumes:
+      - rag-data:/data
+    depends_on:
+      ollama:
+        condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
+      jaeger:
+        condition: service_started
+
+  ollama:
+    image: ollama/ollama:0.31.1@sha256:f1a705f2bd113fb8d15f85f7c217f0dc5f6bebda6b0cc42b82c3ad165ffcb9dc
+    volumes:
+      - ollama-models:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    # GPU (optional): uncomment to hand the container your NVIDIA GPU.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # One-shot: pulls the default models into the shared volume, then exits.
+  ollama-init:
+    image: ollama/ollama:0.31.1@sha256:f1a705f2bd113fb8d15f85f7c217f0dc5f6bebda6b0cc42b82c3ad165ffcb9dc
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["/bin/sh", "-c", "ollama pull llama3.1:8b && ollama pull nomic-embed-text"]
+    restart: "no"
+
+  jaeger:
+    image: jaegertracing/jaeger:2.13.0@sha256:d5e5fe1c2b2f663b07c28c6f7cc5a6e61aef076752dab8df8eeb6b0f5494c94b
+    ports:
+      - "16686:16686" # UI
+      - "4318:4318"   # OTLP/HTTP (host-side runs can export here too)
+
+  # CI smoke: stub LLM + stub embeddings over a tiny committed fixture corpus.
+  # Exercises image build, index build, auth, guardrails, and /ask end to end
+  # with no models and no network egress.
+  api-smoke:
+    profiles: ["smoke"]
+    build: .
+    image: agentic-rag:dev
+    ports:
+      - "${AGENTIC_RAG_API_PORT:-8000}:8000"
+    environment:
+      AGENTIC_RAG_API__TOKEN: smoke-token
+      AGENTIC_RAG_PROVIDER: stub
+      AGENTIC_RAG_EMBEDDING__PROVIDER: stub
+    volumes:
+      - ./docker/smoke:/smoke:ro
+      - smoke-data:/data
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        mkdir -p /data/corpus &&
+        cp /smoke/chunks.jsonl /data/corpus/chunks.jsonl &&
+        agentic-rag index &&
+        exec agentic-rag serve --host 0.0.0.0 --port 8000
+
+volumes:
+  rag-data:
+  ollama-models:
+  smoke-data:

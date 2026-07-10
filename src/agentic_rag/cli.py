@@ -100,12 +100,16 @@ def ask(
     import json
 
     from agentic_rag.config import get_settings
+    from agentic_rag.observability import setup_tracing
     from agentic_rag.pipeline.base import Answer
     from agentic_rag.pipeline.pipeline import RAGPipeline
     from agentic_rag.providers.registry import get_embedding_provider, get_llm_provider
     from agentic_rag.rerank.base import NoopReranker, Reranker
     from agentic_rag.retrieval.base import RetrievalMode
     from agentic_rag.retrieval.retriever import Retriever
+
+    settings = get_settings()
+    setup_tracing(settings)
 
     if stream and json_out:
         raise typer.BadParameter("--stream and --json are mutually exclusive.")
@@ -114,7 +118,6 @@ def ask(
     if agentic and stream:
         raise typer.BadParameter("--agentic does not stream (the critic gates the final answer).")
 
-    settings = get_settings()
     llm = get_llm_provider(provider or settings.provider, settings)
 
     rerank_mode = rerank if rerank is not None else settings.rerank.mode
@@ -600,6 +603,31 @@ def eval_rerank(
 
 
 @app.command()
+def serve(
+    host: str = typer.Option("0.0.0.0", help="Server host."),
+    port: int = typer.Option(8000, help="Server port."),
+) -> None:
+    """Start the FastAPI server."""
+    import uvicorn
+
+    from agentic_rag.api import create_app
+    from agentic_rag.config import get_settings
+
+    settings = get_settings()
+
+    if settings.api.token is None:
+        typer.secho(
+            "Error: AGENTIC_RAG_API__TOKEN must be set",
+            fg="red",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    app_instance = create_app(settings)
+    uvicorn.run(app_instance, host=host, port=port)
+
+
+@app.command()
 def ingest(
     doc: list[str] = typer.Option(  # noqa: B008
         None, "--doc", help="Restrict to specific doc ids (default: full corpus)."
@@ -616,3 +644,47 @@ def ingest(
         f"Ingested {len(manifest.documents)} documents, "
         f"{manifest.total_chunks} chunks -> {manifest.output_path}"
     )
+
+
+@app.command()
+def stats(
+    by: str = typer.Option("provider", help="Group by: provider|model|day|source|pipeline."),
+    since: str | None = typer.Option(None, help="Filter to ts >= YYYY-MM-DD (optional)."),
+    stages: bool = typer.Option(False, "--stages", help="Also show per-stage latency table."),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON instead of markdown."),
+) -> None:
+    """Display aggregated metrics from the SQLite ledger."""
+    import json
+
+    from agentic_rag.config import get_settings
+    from agentic_rag.observability.metrics import metrics_store_for
+
+    settings = get_settings()
+    store = metrics_store_for(settings)
+
+    if store is None:
+        typer.secho("metrics are disabled (settings.metrics.enabled = false)", fg="red", err=True)
+        raise typer.Exit(1)
+
+    if not store.db_path.exists():
+        typer.secho(
+            f"no metrics database found at {store.db_path}; run some queries first",
+            fg="yellow",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    summary_rows = store.summary(since=since, group=by)
+    stage_rows = store.stage_summary(since=since) if stages else []
+
+    if json_out:
+        output = {
+            "summary": summary_rows,
+            "stages": stage_rows if stages else None,
+        }
+        typer.echo(json.dumps(output, indent=2))
+    else:
+        typer.echo(store.format_summary(summary_rows, group=by))
+        if stages:
+            typer.echo()
+            typer.echo(store.format_stages(stage_rows))

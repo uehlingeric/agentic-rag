@@ -8,6 +8,7 @@ import logging
 import statistics
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,7 @@ from agentic_rag.config import Settings
 from agentic_rag.evals.judge import JudgeParseError, judge_answer, judge_provider_for
 from agentic_rag.evals.records import CitedRef, GenerationRecord, record_to_json
 from agentic_rag.evals.retrieval import GoldenExample
+from agentic_rag.observability.metrics import RequestMetric, metrics_store_for
 from agentic_rag.providers.pricing import cost_for
 from agentic_rag.providers.registry import get_embedding_provider, get_llm_provider
 from agentic_rag.rerank.base import NoopReranker, Reranker
@@ -118,6 +120,9 @@ async def run_config(
 
     # Build per-config settings
     cfg_settings = config_settings(settings, cfg)
+
+    # Build metrics store once (may be None if disabled)
+    metrics = metrics_store_for(cfg_settings)
 
     # Build pipeline once
     if _pipeline_factory is not None:
@@ -270,6 +275,59 @@ async def run_config(
                 async with write_lock:
                     with out_path.open("a", encoding="utf-8") as f:
                         f.write(json.dumps(record_to_json(record)) + "\n")
+
+                # Record metrics for generation eval (don't let failures break evals)
+                if metrics is not None:
+                    try:
+                        # Build deterministic request_id from run context
+                        # out_path.stem is e.g. "generation-20250710-120000Z"
+                        request_id = f"{out_path.stem}:{cfg.slug()}:{example.id}"
+                        ts = datetime.now(UTC).isoformat()
+
+                        # stages = latency_s minus "total"
+                        stages = {k: v for k, v in latency_s.items() if k != "total"}
+
+                        metric = RequestMetric(
+                            request_id=request_id,
+                            ts=ts,
+                            source="eval.generation",
+                            provider=cfg.provider,
+                            model=provider_model,
+                            pipeline=cfg.pipeline,
+                            mode=cfg.mode,
+                            rerank=cfg.rerank,
+                            input_tokens=answer.usage.input_tokens,
+                            output_tokens=answer.usage.output_tokens,
+                            cost_usd=answer.usage.cost_usd,
+                            latency_s=latency_s["total"],
+                            stages=stages,
+                            refusal=answer.refusal,
+                            refusal_reason=answer.refusal_reason,
+                        )
+                        metrics.record(metric)
+
+                        # Record judge metrics if present
+                        if judge_scores is not None:
+                            judge_metric = RequestMetric(
+                                request_id=f"{request_id}:judge",
+                                ts=ts,
+                                source="eval.judge",
+                                provider=judge_scores.judge_provider,
+                                model=judge_scores.judge_model,
+                                pipeline=cfg.pipeline,
+                                mode=cfg.mode,
+                                rerank=cfg.rerank,
+                                input_tokens=judge_scores.usage.input_tokens,
+                                output_tokens=judge_scores.usage.output_tokens,
+                                cost_usd=judge_scores.usage.cost_usd,
+                                latency_s=0.0,
+                                stages={},
+                                refusal=False,
+                                refusal_reason=None,
+                            )
+                            metrics.record(judge_metric)
+                    except Exception as exc:
+                        logger.warning(f"metrics record failed for {example.id}: {exc}")
 
             except Exception as exc:
                 logger.error(f"Error processing {example.id}: {exc}", exc_info=True)
