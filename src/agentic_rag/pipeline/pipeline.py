@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from agentic_rag.config import Settings
+from agentic_rag.observability import set_usage_attributes, tracer
 from agentic_rag.pipeline.base import Answer, StageTiming, scrub_sentinel
 from agentic_rag.pipeline.citations import resolve_citations
 from agentic_rag.pipeline.context import build_context
@@ -77,16 +78,27 @@ class RAGPipeline:
         """
         # Retrieve: fetch candidate_pool from retriever
         start_retrieve = time.perf_counter()
-        candidates = await self.retriever.retrieve(
-            question, mode=mode, top_k=self.settings.rerank.candidate_pool
-        )
+        with tracer().start_as_current_span("rag.retrieve") as retrieve_span:
+            candidates = await self.retriever.retrieve(
+                question, mode=mode, top_k=self.settings.rerank.candidate_pool
+            )
+            retrieve_span.set_attribute("rag.mode", mode.value)
+            retrieve_span.set_attribute("rag.chunks.count", len(candidates))
+            retrieve_span.set_attribute("rag.candidate_pool", self.settings.rerank.candidate_pool)
+
         elapsed_retrieve = time.perf_counter() - start_retrieve
 
         # Rerank: cut to top_k and capture usage
         start_rerank = time.perf_counter()
-        reranked = await self.reranker.rerank(
-            question, candidates, top_k=self.settings.rerank.top_k
-        )
+        with tracer().start_as_current_span("rag.rerank") as rerank_span:
+            reranked = await self.reranker.rerank(
+                question, candidates, top_k=self.settings.rerank.top_k
+            )
+            rerank_span.set_attribute("rag.reranker", self.reranker.name)
+            rerank_span.set_attribute("rag.chunks.in", len(candidates))
+            rerank_span.set_attribute("rag.chunks.out", len(reranked))
+            set_usage_attributes(rerank_span, self.reranker.last_usage)
+
         elapsed_rerank = time.perf_counter() - start_rerank
         rerank_usage = self.reranker.last_usage
 
@@ -99,13 +111,20 @@ class RAGPipeline:
 
         # Synthesize: LLM answer generation
         start_synthesis = time.perf_counter()
-        synth_result = await synthesize(
-            self.llm, question, built, max_tokens=self.settings.synthesis.max_answer_tokens
-        )
-        elapsed_synthesis = time.perf_counter() - start_synthesis
+        with tracer().start_as_current_span("rag.synthesize") as synthesize_span:
+            synth_result = await synthesize(
+                self.llm, question, built, max_tokens=self.settings.synthesis.max_answer_tokens
+            )
+            elapsed_synthesis = time.perf_counter() - start_synthesis
 
-        # Citations: resolve markers and validate
-        citation_result = resolve_citations(synth_result.text, built.chunks)
+            # Citations: resolve markers and validate
+            citation_result = resolve_citations(synth_result.text, built.chunks)
+
+            set_usage_attributes(synthesize_span, synth_result.usage)
+            synthesize_span.set_attribute("rag.refusal", synth_result.refusal)
+            synthesize_span.set_attribute(
+                "rag.citations.invalid_count", len(citation_result.invalid_markers)
+            )
 
         # Assemble Answer
         return Answer(
@@ -140,16 +159,27 @@ class RAGPipeline:
         """
         # Retrieve: fetch candidate_pool from retriever
         start_retrieve = time.perf_counter()
-        candidates = await self.retriever.retrieve(
-            question, mode=mode, top_k=self.settings.rerank.candidate_pool
-        )
+        with tracer().start_as_current_span("rag.retrieve") as retrieve_span:
+            candidates = await self.retriever.retrieve(
+                question, mode=mode, top_k=self.settings.rerank.candidate_pool
+            )
+            retrieve_span.set_attribute("rag.mode", mode.value)
+            retrieve_span.set_attribute("rag.chunks.count", len(candidates))
+            retrieve_span.set_attribute("rag.candidate_pool", self.settings.rerank.candidate_pool)
+
         elapsed_retrieve = time.perf_counter() - start_retrieve
 
         # Rerank: cut to top_k and capture usage
         start_rerank = time.perf_counter()
-        reranked = await self.reranker.rerank(
-            question, candidates, top_k=self.settings.rerank.top_k
-        )
+        with tracer().start_as_current_span("rag.rerank") as rerank_span:
+            reranked = await self.reranker.rerank(
+                question, candidates, top_k=self.settings.rerank.top_k
+            )
+            rerank_span.set_attribute("rag.reranker", self.reranker.name)
+            rerank_span.set_attribute("rag.chunks.in", len(candidates))
+            rerank_span.set_attribute("rag.chunks.out", len(reranked))
+            set_usage_attributes(rerank_span, self.reranker.last_usage)
+
         elapsed_rerank = time.perf_counter() - start_rerank
         rerank_usage = self.reranker.last_usage
 
@@ -162,33 +192,45 @@ class RAGPipeline:
 
         # Stream synthesis with sentinel buffering
         start_synthesis = time.perf_counter()
-        async for event in stream_synthesis(
-            self.llm, question, built, max_tokens=self.settings.synthesis.max_answer_tokens
-        ):
-            # Text delta event
-            if event.completion is None:
-                yield AskStreamEvent(delta=event.delta)
-            else:
-                # Terminal event: post-process and resolve citations
-                elapsed_synthesis = time.perf_counter() - start_synthesis
+        # The synthesize span closes before the terminal event is yielded so
+        # spans the consumer starts afterwards (e.g. guardrails.output) nest
+        # under the request root, not under rag.synthesize.
+        answer: Answer | None = None
+        with tracer().start_as_current_span("rag.synthesize") as synthesize_span:
+            async for event in stream_synthesis(
+                self.llm, question, built, max_tokens=self.settings.synthesis.max_answer_tokens
+            ):
+                # Text delta event
+                if event.completion is None:
+                    yield AskStreamEvent(delta=event.delta)
+                else:
+                    # Terminal event: post-process and resolve citations
+                    elapsed_synthesis = time.perf_counter() - start_synthesis
 
-                scrub = scrub_sentinel(event.completion.text)
+                    scrub = scrub_sentinel(event.completion.text)
 
-                citation_result = resolve_citations(scrub.text, built.chunks)
+                    citation_result = resolve_citations(scrub.text, built.chunks)
 
-                answer = Answer(
-                    text=citation_result.text,
-                    citations=citation_result.citations,
-                    context=built.chunks,
-                    usage=rerank_usage + event.completion.usage,
-                    timings=[
-                        StageTiming("retrieve", elapsed_retrieve),
-                        StageTiming("rerank", elapsed_rerank),
-                        StageTiming("synthesize", elapsed_synthesis),
-                    ],
-                    refusal=scrub.refusal,
-                    invalid_citations=citation_result.invalid_markers,
-                )
+                    answer = Answer(
+                        text=citation_result.text,
+                        citations=citation_result.citations,
+                        context=built.chunks,
+                        usage=rerank_usage + event.completion.usage,
+                        timings=[
+                            StageTiming("retrieve", elapsed_retrieve),
+                            StageTiming("rerank", elapsed_rerank),
+                            StageTiming("synthesize", elapsed_synthesis),
+                        ],
+                        refusal=scrub.refusal,
+                        invalid_citations=citation_result.invalid_markers,
+                    )
 
-                yield AskStreamEvent(answer=answer)
-                return
+                    set_usage_attributes(synthesize_span, event.completion.usage)
+                    synthesize_span.set_attribute("rag.refusal", scrub.refusal)
+                    synthesize_span.set_attribute(
+                        "rag.citations.invalid_count", len(citation_result.invalid_markers)
+                    )
+                    break
+
+        if answer is not None:
+            yield AskStreamEvent(answer=answer)

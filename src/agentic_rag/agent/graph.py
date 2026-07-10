@@ -41,6 +41,7 @@ from agentic_rag.agent.state import (
 )
 from agentic_rag.agent.synthesizer import synthesize_draft
 from agentic_rag.config import Settings
+from agentic_rag.observability import set_usage_attributes, tracer
 from agentic_rag.pipeline.base import Answer, StageTiming
 from agentic_rag.pipeline.citations import resolve_citations
 from agentic_rag.pipeline.pipeline import SupportsRetrieve
@@ -140,13 +141,19 @@ class AgenticPipeline:
 
         async def planner_node(state: AgentState) -> dict[str, object]:
             start = time.perf_counter()
-            result = await plan_query(
-                self.llm,
-                state["question"],
-                max_sub_queries=settings.agent.max_sub_queries,
-                max_tokens=settings.agent.planner_max_tokens,
-                prompt_version=settings.agent.planner_prompt_version,
-            )
+            with tracer().start_as_current_span("agent.plan") as plan_span:
+                result = await plan_query(
+                    self.llm,
+                    state["question"],
+                    max_sub_queries=settings.agent.max_sub_queries,
+                    max_tokens=settings.agent.planner_max_tokens,
+                    prompt_version=settings.agent.planner_prompt_version,
+                )
+                plan_span.set_attribute("agent.plan.kind", result.plan.kind.value)
+                plan_span.set_attribute("agent.plan.sub_queries", len(result.plan.sub_queries))
+                plan_span.set_attribute("agent.plan.fallback", result.fallback)
+                set_usage_attributes(plan_span, result.usage)
+
             elapsed = time.perf_counter() - start
             event = TraceEvent(
                 node="planner",
@@ -167,16 +174,22 @@ class AgenticPipeline:
             if plan is None:  # pragma: no cover - planner always precedes retrieve
                 raise RuntimeError("retrieve node ran before planner")
             start = time.perf_counter()
-            result = await gather(
-                self.retriever,
-                self.reranker,
-                plan,
-                mode=mode,
-                candidate_pool=settings.rerank.candidate_pool,
-                top_k=settings.rerank.top_k,
-                max_context_tokens=settings.synthesis.max_context_tokens,
-                count_tokens=self.llm.count_tokens,
-            )
+            with tracer().start_as_current_span("agent.gather") as gather_span:
+                result = await gather(
+                    self.retriever,
+                    self.reranker,
+                    plan,
+                    mode=mode,
+                    candidate_pool=settings.rerank.candidate_pool,
+                    top_k=settings.rerank.top_k,
+                    max_context_tokens=settings.synthesis.max_context_tokens,
+                    count_tokens=self.llm.count_tokens,
+                )
+                gather_span.set_attribute("agent.sub_queries", len(plan.sub_queries))
+                gather_span.set_attribute("rag.context.tokens", result.context.token_count)
+                gather_span.set_attribute("rag.chunks.count", len(result.context.chunks))
+                set_usage_attributes(gather_span, result.usage)
+
             elapsed = time.perf_counter() - start
             event = TraceEvent(
                 node="retrieve",
@@ -202,18 +215,24 @@ class AgenticPipeline:
                 raise RuntimeError("synthesize node ran before retrieve")
             critique = state["critique"]
             revision = critique is not None
-            start = time.perf_counter()
-            draft = await synthesize_draft(
-                self.llm,
-                state["question"],
-                context,
-                prior_draft=state["draft"] if revision else None,
-                critique=critique if revision else None,
-                max_tokens=settings.synthesis.max_answer_tokens,
-                prompt_version=settings.agent.synthesis_prompt_version,
-            )
-            elapsed = time.perf_counter() - start
             revision_count = state["revision_count"] + (1 if revision else 0)
+            start = time.perf_counter()
+            with tracer().start_as_current_span("agent.synthesize") as synthesize_span:
+                draft = await synthesize_draft(
+                    self.llm,
+                    state["question"],
+                    context,
+                    prior_draft=state["draft"] if revision else None,
+                    critique=critique if revision else None,
+                    max_tokens=settings.synthesis.max_answer_tokens,
+                    prompt_version=settings.agent.synthesis_prompt_version,
+                )
+                synthesize_span.set_attribute("agent.revision", revision_count)
+                synthesize_span.set_attribute("rag.refusal", draft.refusal)
+                synthesize_span.set_attribute("agent.stray_sentinel", draft.stray_sentinel)
+                set_usage_attributes(synthesize_span, draft.usage)
+
+            elapsed = time.perf_counter() - start
             event = TraceEvent(
                 node="synthesize",
                 seconds=elapsed,
@@ -235,6 +254,9 @@ class AgenticPipeline:
 
         async def critic_node(state: AgentState) -> dict[str, object]:
             if state["draft_refusal"]:
+                with tracer().start_as_current_span("agent.critic") as critic_span:
+                    critic_span.set_attribute("agent.skipped", True)
+
                 critique = Critique(verdict=CriticVerdict.PASS)
                 event = TraceEvent(node="critic", seconds=0.0, payload={"skipped": "refusal draft"})
                 return {"critique": critique, "critiques": (critique,), "trace": (event,)}
@@ -242,14 +264,20 @@ class AgenticPipeline:
             if context is None:  # pragma: no cover - retrieve always precedes critic
                 raise RuntimeError("critic node ran before retrieve")
             start = time.perf_counter()
-            result = await critique_draft(
-                self.llm,
-                state["question"],
-                context,
-                state["draft"],
-                max_tokens=settings.agent.critic_max_tokens,
-                prompt_version=settings.agent.critic_prompt_version,
-            )
+            with tracer().start_as_current_span("agent.critic") as critic_span:
+                result = await critique_draft(
+                    self.llm,
+                    state["question"],
+                    context,
+                    state["draft"],
+                    max_tokens=settings.agent.critic_max_tokens,
+                    prompt_version=settings.agent.critic_prompt_version,
+                )
+                critic_span.set_attribute("agent.verdict", result.critique.verdict.value)
+                critic_span.set_attribute("agent.issues", len(result.critique.issues))
+                critic_span.set_attribute("agent.skipped", False)
+                set_usage_attributes(critic_span, result.usage)
+
             elapsed = time.perf_counter() - start
             event = TraceEvent(
                 node="critic",

@@ -33,6 +33,7 @@ underlying pipeline, not guardrail overhead.
 from __future__ import annotations
 
 import dataclasses
+import sys
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -49,6 +50,8 @@ from agentic_rag.guardrails.injection import InjectionScanner
 from agentic_rag.guardrails.pii import PIIScanner
 from agentic_rag.guardrails.policy import apply_policy, load_policy
 from agentic_rag.guardrails.refusal import render_refusal
+from agentic_rag.observability import set_usage_attributes, tracer
+from agentic_rag.observability.metrics import RequestMetric, metrics_store_for
 from agentic_rag.pipeline.base import Answer, CitedChunk, StageTiming
 from agentic_rag.pipeline.pipeline import RAGPipeline
 from agentic_rag.providers.base import Usage
@@ -121,7 +124,13 @@ class GuardedPipeline:
     """
 
     def __init__(
-        self, inner: RAGPipeline | AgenticPipeline, settings: Settings, *, provider: str, model: str
+        self,
+        inner: RAGPipeline | AgenticPipeline,
+        settings: Settings,
+        *,
+        provider: str,
+        model: str,
+        source: str = "cli",
     ) -> None:
         """Initialize the guarded pipeline.
 
@@ -130,11 +139,13 @@ class GuardedPipeline:
             settings: Application settings (guardrails, audit dirs, etc).
             provider: Provider name for audit records (e.g., "anthropic").
             model: Model identifier for audit records.
+            source: Metrics source identifier (default "cli").
         """
         self.inner = inner
         self.settings = settings
         self.provider = provider
         self.model = model
+        self.source = source
 
         self.policy = load_policy(settings.guardrails.policy_file)
         self.pii = PIIScanner(ner=settings.guardrails.ner)
@@ -142,6 +153,7 @@ class GuardedPipeline:
 
         audit_dir = settings.guardrails.audit_dir or settings.data_dir / "audit"
         self.audit_writer = AuditWriter(audit_dir) if settings.guardrails.audit_enabled else None
+        self.metrics = metrics_store_for(settings)
 
     async def ask(
         self, question: str, *, mode: RetrievalMode = RetrievalMode.HYBRID
@@ -167,35 +179,208 @@ class GuardedPipeline:
         query_sha256 = sha256_hex(question)
         raw_query = question if self.settings.guardrails.log_raw_query else None
 
-        t_in_start = time.perf_counter()
+        with tracer().start_as_current_span("rag.request") as root_span:
+            root_span.set_attribute("rag.request_id", request_id)
+            root_span.set_attribute("rag.provider", self.provider)
+            root_span.set_attribute("rag.model", self.model)
+            root_span.set_attribute(
+                "rag.pipeline", "agentic" if isinstance(self.inner, AgenticPipeline) else "vanilla"
+            )
+            root_span.set_attribute("rag.mode", mode.value)
+            root_span.set_attribute("rag.rerank", self.inner.settings.rerank.mode)
 
-        # INPUT: Scan original question
-        input_detections = self.pii.scan(question) + self.injection.scan(question)
-        input_verdict = apply_policy(self.policy, question, input_detections, direction="input")
+            t_in_start = time.perf_counter()
 
-        elapsed_in = time.perf_counter() - t_in_start
+            # INPUT: Scan original question
+            with tracer().start_as_current_span("guardrails.input") as input_span:
+                input_detections = self.pii.scan(question) + self.injection.scan(question)
+                input_verdict = apply_policy(
+                    self.policy, question, input_detections, direction="input"
+                )
 
-        # If input blocked, refuse immediately
-        if input_verdict.blocked:
-            reason = RefusalReason.INPUT_PII
-            for det in input_verdict.applied:
-                if det.detection.detector == "injection":
-                    reason = RefusalReason.INPUT_INJECTION
-                    break
+                input_redactions = sum(
+                    1 for a in input_verdict.applied if a.action.value == "redact"
+                )
+                input_span.set_attribute("guardrails.detections", len(input_detections))
+                input_span.set_attribute("guardrails.blocked", input_verdict.blocked)
+                input_span.set_attribute("guardrails.redactions", input_redactions)
 
-            text = render_refusal(self.policy, reason, input_verdict.applied)
-            answer = Answer(
-                text=text,
-                citations=[],
-                context=[],
-                usage=Usage.zero(),
-                timings=[StageTiming("guardrails_in", elapsed_in)],
-                refusal=True,
-                invalid_citations=[],
-                refusal_reason=reason.value,
+            elapsed_in = time.perf_counter() - t_in_start
+
+            # If input blocked, refuse immediately
+            if input_verdict.blocked:
+                reason = RefusalReason.INPUT_PII
+                for det in input_verdict.applied:
+                    if det.detection.detector == "injection":
+                        reason = RefusalReason.INPUT_INJECTION
+                        break
+
+                text = render_refusal(self.policy, reason, input_verdict.applied)
+                answer = Answer(
+                    text=text,
+                    citations=[],
+                    context=[],
+                    usage=Usage.zero(),
+                    timings=[StageTiming("guardrails_in", elapsed_in)],
+                    refusal=True,
+                    invalid_citations=[],
+                    refusal_reason=reason.value,
+                )
+
+                # Write audit without answer/output
+                audit_record = AuditRecord(
+                    request_id=request_id,
+                    ts=ts,
+                    query_sha256=query_sha256,
+                    raw_query=raw_query,
+                    provider=self.provider,
+                    model=self.model,
+                    pipeline="agentic" if isinstance(self.inner, AgenticPipeline) else "vanilla",
+                    mode=mode.value,
+                    rerank=self.inner.settings.rerank.mode,
+                    guardrails_enabled=True,
+                    policy_version=self.policy.version,
+                    ner=self.settings.guardrails.ner,
+                    input_scan=ScanSummary(input_verdict.applied, input_verdict.blocked),
+                    output_scan=None,
+                    retrieved_flagged_chunk_ids=(),
+                    chunk_ids=(),
+                    input_tokens=0,
+                    output_tokens=0,
+                    cost_usd=None,
+                    latency_s={"guardrails_in": elapsed_in, "total": elapsed_in},
+                    refusal=True,
+                    refusal_reason=reason.value,
+                    answer_sha256=None,
+                )
+                audit_path = self.audit_writer.write(audit_record) if self.audit_writer else None
+
+                # Record metrics (don't let failures break requests)
+                if self.metrics is not None:
+                    try:
+                        metric = RequestMetric(
+                            request_id=request_id,
+                            ts=ts,
+                            source=self.source,
+                            provider=self.provider,
+                            model=self.model,
+                            pipeline="agentic"
+                            if isinstance(self.inner, AgenticPipeline)
+                            else "vanilla",
+                            mode=mode.value,
+                            rerank=self.inner.settings.rerank.mode,
+                            input_tokens=0,
+                            output_tokens=0,
+                            cost_usd=None,
+                            latency_s=elapsed_in,
+                            stages={"guardrails_in": elapsed_in},
+                            refusal=True,
+                            refusal_reason=reason.value,
+                        )
+                        self.metrics.record(metric)
+                    except Exception as exc:
+                        print(
+                            f"metrics record failed: {exc}",
+                            file=sys.stderr,
+                        )
+
+                root_span.set_attribute("rag.refusal", True)
+                root_span.set_attribute("rag.refusal_reason", reason.value)
+                root_span.set_attribute("guardrails.retrieved_flagged_count", 0)
+
+                return GuardedResult(
+                    answer=answer,
+                    agent=None,
+                    request_id=request_id,
+                    input_verdict=input_verdict,
+                    output_verdict=None,
+                    retrieved_flagged_chunk_ids=(),
+                    audit_path=audit_path,
+                )
+
+            # PIPELINE: Run inner on (possibly redacted) question
+            result = await self.inner.ask(input_verdict.text, mode=mode)
+
+            # Unwrap agent result if present
+            if isinstance(result, AgentAnswer):
+                answer = result.answer
+                agent_meta = result
+            else:
+                answer = result
+                agent_meta = None
+
+            # RETRIEVED: Scan each context chunk for injection (audit-only)
+            retrieved_flagged_chunk_ids: list[str] = []
+            for scored in answer.context:
+                injection_dets = self.injection.scan(scored.chunk.text)
+                if injection_dets:
+                    _ = apply_policy(
+                        self.policy, scored.chunk.text, injection_dets, direction="retrieved"
+                    )
+                    retrieved_flagged_chunk_ids.append(scored.chunk.chunk_id)
+
+            # OUTPUT: Scan answer text for PII
+            t_out_start = time.perf_counter()
+            with tracer().start_as_current_span("guardrails.output") as output_span:
+                output_detections = self.pii.scan(answer.text)
+                output_verdict = apply_policy(
+                    self.policy, answer.text, output_detections, direction="output"
+                )
+                output_redactions = sum(
+                    1 for a in output_verdict.applied if a.action.value == "redact"
+                )
+                output_span.set_attribute("guardrails.detections", len(output_detections))
+                output_span.set_attribute("guardrails.blocked", output_verdict.blocked)
+                output_span.set_attribute("guardrails.redactions", output_redactions)
+
+            elapsed_out = time.perf_counter() - t_out_start
+
+            # Determine final answer after output policy
+            if output_verdict.blocked:
+                # Output blocked: replace with refusal
+                final_text = render_refusal(
+                    self.policy, RefusalReason.OUTPUT_PII, output_verdict.applied
+                )
+                refusal = True
+                refusal_reason: str | None = RefusalReason.OUTPUT_PII.value
+                final_citations: list[CitedChunk] = []
+            else:
+                # Output not blocked: use redacted text
+                final_text = output_verdict.text
+                refusal = answer.refusal
+                refusal_reason = RefusalReason.OUT_OF_CORPUS.value if answer.refusal else None
+                final_citations = answer.citations
+
+            # Build final answer
+            final_answer = dataclasses.replace(
+                answer,
+                text=final_text,
+                refusal=refusal,
+                refusal_reason=refusal_reason,
+                citations=final_citations,
+                timings=[
+                    *answer.timings,
+                    StageTiming("guardrails_in", elapsed_in),
+                    StageTiming("guardrails_out", elapsed_out),
+                ],
             )
 
-            # Write audit without answer/output
+            # Update agent wrapper if present
+            if agent_meta is not None:
+                agent_out = dataclasses.replace(agent_meta, answer=final_answer)
+            else:
+                agent_out = None
+
+            # AUDIT: Write record
+            answer_sha256 = (
+                sha256_hex(final_answer.text)
+                if final_answer.text and not input_verdict.blocked
+                else None
+            )
+
+            latency_timings: dict[str, float] = {t.stage: t.seconds for t in final_answer.timings}
+            latency_timings["total"] = sum(t.seconds for t in final_answer.timings)
+
             audit_record = AuditRecord(
                 request_id=request_id,
                 ts=ts,
@@ -203,147 +388,73 @@ class GuardedPipeline:
                 raw_query=raw_query,
                 provider=self.provider,
                 model=self.model,
-                pipeline="agentic" if isinstance(self.inner, AgenticPipeline) else "vanilla",
+                pipeline="agentic" if agent_meta else "vanilla",
                 mode=mode.value,
                 rerank=self.inner.settings.rerank.mode,
                 guardrails_enabled=True,
                 policy_version=self.policy.version,
                 ner=self.settings.guardrails.ner,
                 input_scan=ScanSummary(input_verdict.applied, input_verdict.blocked),
-                output_scan=None,
-                retrieved_flagged_chunk_ids=(),
-                chunk_ids=(),
-                input_tokens=0,
-                output_tokens=0,
-                cost_usd=None,
-                latency_s={"guardrails_in": elapsed_in, "total": elapsed_in},
-                refusal=True,
-                refusal_reason=reason.value,
-                answer_sha256=None,
+                output_scan=ScanSummary(output_verdict.applied, output_verdict.blocked),
+                retrieved_flagged_chunk_ids=tuple(retrieved_flagged_chunk_ids),
+                chunk_ids=tuple(s.chunk.chunk_id for s in final_answer.context),
+                input_tokens=final_answer.usage.input_tokens,
+                output_tokens=final_answer.usage.output_tokens,
+                cost_usd=final_answer.usage.cost_usd,
+                latency_s=latency_timings,
+                refusal=final_answer.refusal,
+                refusal_reason=final_answer.refusal_reason,
+                answer_sha256=answer_sha256,
             )
             audit_path = self.audit_writer.write(audit_record) if self.audit_writer else None
 
+            # Record metrics (don't let failures break requests)
+            if self.metrics is not None:
+                try:
+                    # stages = latency_timings minus "total"
+                    stages = {k: v for k, v in latency_timings.items() if k != "total"}
+                    metric = RequestMetric(
+                        request_id=request_id,
+                        ts=ts,
+                        source=self.source,
+                        provider=self.provider,
+                        model=self.model,
+                        pipeline="agentic" if agent_meta else "vanilla",
+                        mode=mode.value,
+                        rerank=self.inner.settings.rerank.mode,
+                        input_tokens=final_answer.usage.input_tokens,
+                        output_tokens=final_answer.usage.output_tokens,
+                        cost_usd=final_answer.usage.cost_usd,
+                        latency_s=latency_timings["total"],
+                        stages=stages,
+                        refusal=final_answer.refusal,
+                        refusal_reason=final_answer.refusal_reason,
+                    )
+                    self.metrics.record(metric)
+                except Exception as exc:
+                    print(
+                        f"metrics record failed: {exc}",
+                        file=sys.stderr,
+                    )
+
+            # Set final root span attributes
+            root_span.set_attribute("rag.refusal", final_answer.refusal)
+            if final_answer.refusal_reason is not None:
+                root_span.set_attribute("rag.refusal_reason", final_answer.refusal_reason)
+            set_usage_attributes(root_span, final_answer.usage)
+            root_span.set_attribute(
+                "guardrails.retrieved_flagged_count", len(retrieved_flagged_chunk_ids)
+            )
+
             return GuardedResult(
-                answer=answer,
-                agent=None,
+                answer=final_answer,
+                agent=agent_out,
                 request_id=request_id,
                 input_verdict=input_verdict,
-                output_verdict=None,
-                retrieved_flagged_chunk_ids=(),
+                output_verdict=output_verdict,
+                retrieved_flagged_chunk_ids=tuple(retrieved_flagged_chunk_ids),
                 audit_path=audit_path,
             )
-
-        # PIPELINE: Run inner on (possibly redacted) question
-        result = await self.inner.ask(input_verdict.text, mode=mode)
-
-        # Unwrap agent result if present
-        if isinstance(result, AgentAnswer):
-            answer = result.answer
-            agent_meta = result
-        else:
-            answer = result
-            agent_meta = None
-
-        # RETRIEVED: Scan each context chunk for injection (audit-only)
-        retrieved_flagged_chunk_ids: list[str] = []
-        for scored in answer.context:
-            injection_dets = self.injection.scan(scored.chunk.text)
-            if injection_dets:
-                _ = apply_policy(
-                    self.policy, scored.chunk.text, injection_dets, direction="retrieved"
-                )
-                retrieved_flagged_chunk_ids.append(scored.chunk.chunk_id)
-
-        # OUTPUT: Scan answer text for PII
-        t_out_start = time.perf_counter()
-        output_detections = self.pii.scan(answer.text)
-        output_verdict = apply_policy(
-            self.policy, answer.text, output_detections, direction="output"
-        )
-        elapsed_out = time.perf_counter() - t_out_start
-
-        # Determine final answer after output policy
-        if output_verdict.blocked:
-            # Output blocked: replace with refusal
-            final_text = render_refusal(
-                self.policy, RefusalReason.OUTPUT_PII, output_verdict.applied
-            )
-            refusal = True
-            refusal_reason: str | None = RefusalReason.OUTPUT_PII.value
-            final_citations: list[CitedChunk] = []
-        else:
-            # Output not blocked: use redacted text
-            final_text = output_verdict.text
-            refusal = answer.refusal
-            refusal_reason = RefusalReason.OUT_OF_CORPUS.value if answer.refusal else None
-            final_citations = answer.citations
-
-        # Build final answer
-        final_answer = dataclasses.replace(
-            answer,
-            text=final_text,
-            refusal=refusal,
-            refusal_reason=refusal_reason,
-            citations=final_citations,
-            timings=[
-                *answer.timings,
-                StageTiming("guardrails_in", elapsed_in),
-                StageTiming("guardrails_out", elapsed_out),
-            ],
-        )
-
-        # Update agent wrapper if present
-        if agent_meta is not None:
-            agent_out = dataclasses.replace(agent_meta, answer=final_answer)
-        else:
-            agent_out = None
-
-        # AUDIT: Write record
-        answer_sha256 = (
-            sha256_hex(final_answer.text)
-            if final_answer.text and not input_verdict.blocked
-            else None
-        )
-
-        latency_timings: dict[str, float] = {t.stage: t.seconds for t in final_answer.timings}
-        latency_timings["total"] = sum(t.seconds for t in final_answer.timings)
-
-        audit_record = AuditRecord(
-            request_id=request_id,
-            ts=ts,
-            query_sha256=query_sha256,
-            raw_query=raw_query,
-            provider=self.provider,
-            model=self.model,
-            pipeline="agentic" if agent_meta else "vanilla",
-            mode=mode.value,
-            rerank=self.inner.settings.rerank.mode,
-            guardrails_enabled=True,
-            policy_version=self.policy.version,
-            ner=self.settings.guardrails.ner,
-            input_scan=ScanSummary(input_verdict.applied, input_verdict.blocked),
-            output_scan=ScanSummary(output_verdict.applied, output_verdict.blocked),
-            retrieved_flagged_chunk_ids=tuple(retrieved_flagged_chunk_ids),
-            chunk_ids=tuple(s.chunk.chunk_id for s in final_answer.context),
-            input_tokens=final_answer.usage.input_tokens,
-            output_tokens=final_answer.usage.output_tokens,
-            cost_usd=final_answer.usage.cost_usd,
-            latency_s=latency_timings,
-            refusal=final_answer.refusal,
-            refusal_reason=final_answer.refusal_reason,
-            answer_sha256=answer_sha256,
-        )
-        audit_path = self.audit_writer.write(audit_record) if self.audit_writer else None
-
-        return GuardedResult(
-            answer=final_answer,
-            agent=agent_out,
-            request_id=request_id,
-            input_verdict=input_verdict,
-            output_verdict=output_verdict,
-            retrieved_flagged_chunk_ids=tuple(retrieved_flagged_chunk_ids),
-            audit_path=audit_path,
-        )
 
     def ask_stream(
         self, question: str, *, mode: RetrievalMode = RetrievalMode.HYBRID
@@ -375,146 +486,54 @@ class GuardedPipeline:
             query_sha256 = sha256_hex(question)
             raw_query = question if self.settings.guardrails.log_raw_query else None
 
-            t_in_start = time.perf_counter()
+            # Start root span for the entire streaming operation
+            with tracer().start_as_current_span("rag.request") as root_span:
+                root_span.set_attribute("rag.request_id", request_id)
+                root_span.set_attribute("rag.provider", self.provider)
+                root_span.set_attribute("rag.model", self.model)
+                root_span.set_attribute("rag.pipeline", "vanilla")
+                root_span.set_attribute("rag.mode", mode.value)
+                root_span.set_attribute("rag.rerank", self.inner.settings.rerank.mode)
 
-            # INPUT: Scan original question
-            input_detections = self.pii.scan(question) + self.injection.scan(question)
-            input_verdict = apply_policy(self.policy, question, input_detections, direction="input")
+                t_in_start = time.perf_counter()
 
-            elapsed_in = time.perf_counter() - t_in_start
-
-            # If input blocked, yield one terminal refusal event
-            if input_verdict.blocked:
-                reason = RefusalReason.INPUT_PII
-                for det in input_verdict.applied:
-                    if det.detection.detector == "injection":
-                        reason = RefusalReason.INPUT_INJECTION
-                        break
-
-                text = render_refusal(self.policy, reason, input_verdict.applied)
-                answer = Answer(
-                    text=text,
-                    citations=[],
-                    context=[],
-                    usage=Usage.zero(),
-                    timings=[StageTiming("guardrails_in", elapsed_in)],
-                    refusal=True,
-                    invalid_citations=[],
-                    refusal_reason=reason.value,
-                )
-
-                # Write audit without answer/output
-                audit_record = AuditRecord(
-                    request_id=request_id,
-                    ts=ts,
-                    query_sha256=query_sha256,
-                    raw_query=raw_query,
-                    provider=self.provider,
-                    model=self.model,
-                    pipeline="vanilla",
-                    mode=mode.value,
-                    rerank=self.inner.settings.rerank.mode,
-                    guardrails_enabled=True,
-                    policy_version=self.policy.version,
-                    ner=self.settings.guardrails.ner,
-                    input_scan=ScanSummary(input_verdict.applied, input_verdict.blocked),
-                    output_scan=None,
-                    retrieved_flagged_chunk_ids=(),
-                    chunk_ids=(),
-                    input_tokens=0,
-                    output_tokens=0,
-                    cost_usd=None,
-                    latency_s={"guardrails_in": elapsed_in, "total": elapsed_in},
-                    refusal=True,
-                    refusal_reason=reason.value,
-                    answer_sha256=None,
-                )
-                audit_path = self.audit_writer.write(audit_record) if self.audit_writer else None
-
-                yield GuardedStreamEvent(
-                    result=GuardedResult(
-                        answer=answer,
-                        agent=None,
-                        request_id=request_id,
-                        input_verdict=input_verdict,
-                        output_verdict=None,
-                        retrieved_flagged_chunk_ids=(),
-                        audit_path=audit_path,
-                    )
-                )
-                return
-
-            # PIPELINE: Stream from inner on (possibly redacted) question
-            t_out_start = time.perf_counter()
-            final_answer: Answer | None = None
-            async for event in cast(RAGPipeline, self.inner).ask_stream(
-                input_verdict.text, mode=mode
-            ):
-                if event.answer is not None:
-                    # Terminal event: process answer through output guardrails
-                    final_answer = event.answer
-
-                    # RETRIEVED: Scan each context chunk for injection (audit-only)
-                    retrieved_flagged_chunk_ids: list[str] = []
-                    for scored in final_answer.context:
-                        injection_dets = self.injection.scan(scored.chunk.text)
-                        if injection_dets:
-                            _ = apply_policy(
-                                self.policy,
-                                scored.chunk.text,
-                                injection_dets,
-                                direction="retrieved",
-                            )
-                            retrieved_flagged_chunk_ids.append(scored.chunk.chunk_id)
-
-                    # OUTPUT: Scan answer text for PII
-                    output_detections = self.pii.scan(final_answer.text)
-                    output_verdict = apply_policy(
-                        self.policy, final_answer.text, output_detections, direction="output"
+                # INPUT: Scan original question
+                with tracer().start_as_current_span("guardrails.input") as input_span:
+                    input_detections = self.pii.scan(question) + self.injection.scan(question)
+                    input_verdict = apply_policy(
+                        self.policy, question, input_detections, direction="input"
                     )
 
-                    elapsed_out = time.perf_counter() - t_out_start
+                    input_redactions = sum(
+                        1 for a in input_verdict.applied if a.action.value == "redact"
+                    )
+                    input_span.set_attribute("guardrails.detections", len(input_detections))
+                    input_span.set_attribute("guardrails.blocked", input_verdict.blocked)
+                    input_span.set_attribute("guardrails.redactions", input_redactions)
 
-                    # Determine final answer after output policy
-                    if output_verdict.blocked:
-                        final_text = render_refusal(
-                            self.policy, RefusalReason.OUTPUT_PII, output_verdict.applied
-                        )
-                        refusal = True
-                        refusal_reason: str | None = RefusalReason.OUTPUT_PII.value
-                        final_citations: list[CitedChunk] = []
-                    else:
-                        final_text = output_verdict.text
-                        refusal = final_answer.refusal
-                        refusal_reason = (
-                            RefusalReason.OUT_OF_CORPUS.value if final_answer.refusal else None
-                        )
-                        final_citations = final_answer.citations
+                elapsed_in = time.perf_counter() - t_in_start
 
-                    # Build final answer
-                    processed_answer = dataclasses.replace(
-                        final_answer,
-                        text=final_text,
-                        refusal=refusal,
-                        refusal_reason=refusal_reason,
-                        citations=final_citations,
-                        timings=[
-                            *final_answer.timings,
-                            StageTiming("guardrails_in", elapsed_in),
-                            StageTiming("guardrails_out", elapsed_out),
-                        ],
+                # If input blocked, yield one terminal refusal event
+                if input_verdict.blocked:
+                    reason = RefusalReason.INPUT_PII
+                    for det in input_verdict.applied:
+                        if det.detection.detector == "injection":
+                            reason = RefusalReason.INPUT_INJECTION
+                            break
+
+                    text = render_refusal(self.policy, reason, input_verdict.applied)
+                    answer = Answer(
+                        text=text,
+                        citations=[],
+                        context=[],
+                        usage=Usage.zero(),
+                        timings=[StageTiming("guardrails_in", elapsed_in)],
+                        refusal=True,
+                        invalid_citations=[],
+                        refusal_reason=reason.value,
                     )
 
-                    # AUDIT: Write record
-                    answer_sha256 = (
-                        sha256_hex(processed_answer.text) if processed_answer.text else None
-                    )
-
-                    latency_timings: dict[str, float] = {
-                        t.stage: t.seconds for t in processed_answer.timings
-                    }
-                    latency_timings["total"] = sum(t.seconds for t in processed_answer.timings)
-
+                    # Write audit without answer/output
                     audit_record = AuditRecord(
                         request_id=request_id,
                         ts=ts,
@@ -529,34 +548,231 @@ class GuardedPipeline:
                         policy_version=self.policy.version,
                         ner=self.settings.guardrails.ner,
                         input_scan=ScanSummary(input_verdict.applied, input_verdict.blocked),
-                        output_scan=ScanSummary(output_verdict.applied, output_verdict.blocked),
-                        retrieved_flagged_chunk_ids=tuple(retrieved_flagged_chunk_ids),
-                        chunk_ids=tuple(s.chunk.chunk_id for s in processed_answer.context),
-                        input_tokens=processed_answer.usage.input_tokens,
-                        output_tokens=processed_answer.usage.output_tokens,
-                        cost_usd=processed_answer.usage.cost_usd,
-                        latency_s=latency_timings,
-                        refusal=processed_answer.refusal,
-                        refusal_reason=processed_answer.refusal_reason,
-                        answer_sha256=answer_sha256,
+                        output_scan=None,
+                        retrieved_flagged_chunk_ids=(),
+                        chunk_ids=(),
+                        input_tokens=0,
+                        output_tokens=0,
+                        cost_usd=None,
+                        latency_s={"guardrails_in": elapsed_in, "total": elapsed_in},
+                        refusal=True,
+                        refusal_reason=reason.value,
+                        answer_sha256=None,
                     )
                     audit_path = (
                         self.audit_writer.write(audit_record) if self.audit_writer else None
                     )
 
+                    # Record metrics (don't let failures break requests)
+                    if self.metrics is not None:
+                        try:
+                            metric = RequestMetric(
+                                request_id=request_id,
+                                ts=ts,
+                                source=self.source,
+                                provider=self.provider,
+                                model=self.model,
+                                pipeline="vanilla",
+                                mode=mode.value,
+                                rerank=self.inner.settings.rerank.mode,
+                                input_tokens=0,
+                                output_tokens=0,
+                                cost_usd=None,
+                                latency_s=elapsed_in,
+                                stages={"guardrails_in": elapsed_in},
+                                refusal=True,
+                                refusal_reason=reason.value,
+                            )
+                            self.metrics.record(metric)
+                        except Exception as exc:
+                            print(
+                                f"metrics record failed: {exc}",
+                                file=sys.stderr,
+                            )
+
+                    root_span.set_attribute("rag.refusal", True)
+                    root_span.set_attribute("rag.refusal_reason", reason.value)
+                    root_span.set_attribute("guardrails.retrieved_flagged_count", 0)
+
                     yield GuardedStreamEvent(
                         result=GuardedResult(
-                            answer=processed_answer,
+                            answer=answer,
                             agent=None,
                             request_id=request_id,
                             input_verdict=input_verdict,
-                            output_verdict=output_verdict,
-                            retrieved_flagged_chunk_ids=tuple(retrieved_flagged_chunk_ids),
+                            output_verdict=None,
+                            retrieved_flagged_chunk_ids=(),
                             audit_path=audit_path,
                         )
                     )
-                else:
-                    # Pass-through delta events
-                    yield GuardedStreamEvent(delta=event.delta)
+                    return
+
+                # PIPELINE: Stream from inner on (possibly redacted) question
+                t_out_start = time.perf_counter()
+                final_answer: Answer | None = None
+                async for event in cast(RAGPipeline, self.inner).ask_stream(
+                    input_verdict.text, mode=mode
+                ):
+                    if event.answer is not None:
+                        # Terminal event: process answer through output guardrails
+                        final_answer = event.answer
+
+                        # RETRIEVED: Scan each context chunk for injection (audit-only)
+                        retrieved_flagged_chunk_ids: list[str] = []
+                        for scored in final_answer.context:
+                            injection_dets = self.injection.scan(scored.chunk.text)
+                            if injection_dets:
+                                _ = apply_policy(
+                                    self.policy,
+                                    scored.chunk.text,
+                                    injection_dets,
+                                    direction="retrieved",
+                                )
+                                retrieved_flagged_chunk_ids.append(scored.chunk.chunk_id)
+
+                        # OUTPUT: Scan answer text for PII
+                        with tracer().start_as_current_span("guardrails.output") as output_span:
+                            output_detections = self.pii.scan(final_answer.text)
+                            output_verdict = apply_policy(
+                                self.policy,
+                                final_answer.text,
+                                output_detections,
+                                direction="output",
+                            )
+
+                            output_redactions = sum(
+                                1 for a in output_verdict.applied if a.action.value == "redact"
+                            )
+                            output_span.set_attribute(
+                                "guardrails.detections", len(output_detections)
+                            )
+                            output_span.set_attribute("guardrails.blocked", output_verdict.blocked)
+                            output_span.set_attribute("guardrails.redactions", output_redactions)
+
+                        elapsed_out = time.perf_counter() - t_out_start
+
+                        # Determine final answer after output policy
+                        if output_verdict.blocked:
+                            final_text = render_refusal(
+                                self.policy, RefusalReason.OUTPUT_PII, output_verdict.applied
+                            )
+                            refusal = True
+                            refusal_reason: str | None = RefusalReason.OUTPUT_PII.value
+                            final_citations: list[CitedChunk] = []
+                        else:
+                            final_text = output_verdict.text
+                            refusal = final_answer.refusal
+                            refusal_reason = (
+                                RefusalReason.OUT_OF_CORPUS.value if final_answer.refusal else None
+                            )
+                            final_citations = final_answer.citations
+
+                        # Build final answer
+                        processed_answer = dataclasses.replace(
+                            final_answer,
+                            text=final_text,
+                            refusal=refusal,
+                            refusal_reason=refusal_reason,
+                            citations=final_citations,
+                            timings=[
+                                *final_answer.timings,
+                                StageTiming("guardrails_in", elapsed_in),
+                                StageTiming("guardrails_out", elapsed_out),
+                            ],
+                        )
+
+                        # AUDIT: Write record
+                        answer_sha256 = (
+                            sha256_hex(processed_answer.text) if processed_answer.text else None
+                        )
+
+                        latency_timings: dict[str, float] = {
+                            t.stage: t.seconds for t in processed_answer.timings
+                        }
+                        latency_timings["total"] = sum(t.seconds for t in processed_answer.timings)
+
+                        audit_record = AuditRecord(
+                            request_id=request_id,
+                            ts=ts,
+                            query_sha256=query_sha256,
+                            raw_query=raw_query,
+                            provider=self.provider,
+                            model=self.model,
+                            pipeline="vanilla",
+                            mode=mode.value,
+                            rerank=self.inner.settings.rerank.mode,
+                            guardrails_enabled=True,
+                            policy_version=self.policy.version,
+                            ner=self.settings.guardrails.ner,
+                            input_scan=ScanSummary(input_verdict.applied, input_verdict.blocked),
+                            output_scan=ScanSummary(output_verdict.applied, output_verdict.blocked),
+                            retrieved_flagged_chunk_ids=tuple(retrieved_flagged_chunk_ids),
+                            chunk_ids=tuple(s.chunk.chunk_id for s in processed_answer.context),
+                            input_tokens=processed_answer.usage.input_tokens,
+                            output_tokens=processed_answer.usage.output_tokens,
+                            cost_usd=processed_answer.usage.cost_usd,
+                            latency_s=latency_timings,
+                            refusal=processed_answer.refusal,
+                            refusal_reason=processed_answer.refusal_reason,
+                            answer_sha256=answer_sha256,
+                        )
+                        audit_path = (
+                            self.audit_writer.write(audit_record) if self.audit_writer else None
+                        )
+
+                        # Record metrics (don't let failures break requests)
+                        if self.metrics is not None:
+                            try:
+                                # stages = latency_timings minus "total"
+                                stages = {k: v for k, v in latency_timings.items() if k != "total"}
+                                metric = RequestMetric(
+                                    request_id=request_id,
+                                    ts=ts,
+                                    source=self.source,
+                                    provider=self.provider,
+                                    model=self.model,
+                                    pipeline="vanilla",
+                                    mode=mode.value,
+                                    rerank=self.inner.settings.rerank.mode,
+                                    input_tokens=processed_answer.usage.input_tokens,
+                                    output_tokens=processed_answer.usage.output_tokens,
+                                    cost_usd=processed_answer.usage.cost_usd,
+                                    latency_s=latency_timings["total"],
+                                    stages=stages,
+                                    refusal=processed_answer.refusal,
+                                    refusal_reason=processed_answer.refusal_reason,
+                                )
+                                self.metrics.record(metric)
+                            except Exception as exc:
+                                print(
+                                    f"metrics record failed: {exc}",
+                                    file=sys.stderr,
+                                )
+
+                        # Set final root span attributes
+                        root_span.set_attribute("rag.refusal", processed_answer.refusal)
+                        if processed_answer.refusal_reason is not None:
+                            root_span.set_attribute(
+                                "rag.refusal_reason", processed_answer.refusal_reason
+                            )
+                        set_usage_attributes(root_span, processed_answer.usage)
+                        root_span.set_attribute(
+                            "guardrails.retrieved_flagged_count", len(retrieved_flagged_chunk_ids)
+                        )
+
+                        yield GuardedStreamEvent(
+                            result=GuardedResult(
+                                answer=processed_answer,
+                                agent=None,
+                                request_id=request_id,
+                                input_verdict=input_verdict,
+                                output_verdict=output_verdict,
+                                retrieved_flagged_chunk_ids=tuple(retrieved_flagged_chunk_ids),
+                                audit_path=audit_path,
+                            )
+                        )
+                    else:
+                        # Pass-through delta events
+                        yield GuardedStreamEvent(delta=event.delta)
 
         return _stream()

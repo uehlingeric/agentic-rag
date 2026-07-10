@@ -137,6 +137,49 @@ class RetrySettings(BaseModel):
     max_backoff_s: float = 30.0
 
 
+class ObservabilitySettings(BaseModel):
+    """OpenTelemetry tracing configuration.
+
+    Instrumentation is always compiled in; spans are no-ops until setup_tracing()
+    installs a real TracerProvider. ``exporter`` determines the backend: "console"
+    emits to stderr (debugging); "otlp" exports to an OTLP/HTTP endpoint (Jaeger
+    integration via ``otlp_endpoint``). ``sample_ratio`` controls head sampling
+    via ParentBased(TraceIdRatioBased); ``service_name`` tags all traces.
+    """
+
+    enabled: bool = False
+    exporter: str = "console"
+    otlp_endpoint: str = "http://localhost:4318"
+    sample_ratio: float = 1.0
+    service_name: str = "agentic-rag"
+
+
+class MetricsSettings(BaseModel):
+    """Per-request metrics recording to SQLite ledger.
+
+    One SQLite row per request (CLI/API) or eval LLM interaction; aggregation
+    happens at query time via ``agentic-rag stats``. The ledger lives under
+    ``data_dir`` by default, is append-only, and uses WAL + busy_timeout for
+    safe concurrent writes from multiple API workers (no in-process state lost
+    on crash).
+    """
+
+    enabled: bool = True
+    db_path: Path | None = None
+
+
+class ApiSettings(BaseModel):
+    """FastAPI service configuration.
+
+    Static bearer token (no user accounts — reference system). Serve refuses
+    to start when token is unset. Rate limiting is per-token via slowapi.
+    Set via AGENTIC_RAG_API__TOKEN environment variable.
+    """
+
+    token: str | None = None
+    rate_limit: str = "60/minute"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="AGENTIC_RAG_",
@@ -159,6 +202,9 @@ class Settings(BaseSettings):
     guardrails: GuardrailsSettings = GuardrailsSettings()
     judge: JudgeSettings = JudgeSettings()
     retry: RetrySettings = RetrySettings()
+    observability: ObservabilitySettings = ObservabilitySettings()
+    metrics: MetricsSettings = MetricsSettings()
+    api: ApiSettings = ApiSettings()
     data_dir: Path = Path("data")
 
     @classmethod

@@ -28,3 +28,48 @@ jobs:
         run: uv run mypy
       - name: Test
         run: uv run pytest --cov --cov-report=term-missing
+
+  # Image build + end-to-end smoke: stub provider over the committed fixture
+  # corpus — exercises entrypoint, index build, auth, guardrails, and /ask
+  # with no models and no network egress.
+  docker-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker compose --profile smoke build api-smoke
+      - name: Start smoke stack
+        run: docker compose --profile smoke up -d api-smoke
+      - name: Wait for readiness
+        run: |
+          timeout 180 sh -c 'until curl -sf localhost:8000/health | grep -q "\"index_loaded\":true"; do sleep 3; done'
+      - name: Smoke /ask (cited answer, guardrails on)
+        run: |
+          curl -sf -X POST localhost:8000/ask \
+            -H "Authorization: Bearer smoke-token" \
+            -H "Content-Type: application/json" \
+            -d '{"question":"What does AC-2 require?"}' -o /tmp/ask.json
+          python3 - <<'EOF'
+          import json
+          d = json.load(open("/tmp/ask.json"))
+          assert d["refusal"] is False, d
+          assert d["citations"], "no citations resolved"
+          assert d["request_id"], "no request id"
+          assert d["guardrails"]["input"]["blocked"] is False, d["guardrails"]
+          print("smoke /ask OK:", d["answer"])
+          EOF
+      - name: Auth is enforced
+        run: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" -X POST localhost:8000/ask \
+            -H "Content-Type: application/json" -d '{"question":"x"}')
+          test "$code" = "401"
+      - name: Input guardrail blocks PII
+        run: |
+          curl -sf -X POST localhost:8000/ask \
+            -H "Authorization: Bearer smoke-token" \
+            -H "Content-Type: application/json" \
+            -d '{"question":"My SSN is 123-45-6789, what does AC-2 require?"}' -o /tmp/pii.json
+          python3 -c "import json; d=json.load(open('/tmp/pii.json')); assert d['refusal_reason']=='input_pii', d"
+      - name: Logs on failure
+        if: failure()
+        run: docker compose --profile smoke logs

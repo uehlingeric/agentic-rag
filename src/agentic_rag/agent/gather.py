@@ -12,6 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from agentic_rag.agent.state import Plan, SubQueryResult
+from agentic_rag.observability import set_usage_attributes, tracer
 from agentic_rag.pipeline.context import BuiltContext, build_context
 from agentic_rag.pipeline.pipeline import SupportsRetrieve
 from agentic_rag.providers.base import Usage
@@ -77,12 +78,22 @@ async def gather(
     merged_chunks: list[ScoredChunk] = []
 
     # Process sub-queries sequentially so reranker.last_usage is correctly scoped
-    for query in plan.sub_queries:
+    for sub_query_index, query in enumerate(plan.sub_queries):
         # Retrieve candidates
-        candidates = await retriever.retrieve(query, mode=mode, top_k=candidate_pool)
+        with tracer().start_as_current_span("rag.retrieve") as retrieve_span:
+            candidates = await retriever.retrieve(query, mode=mode, top_k=candidate_pool)
+            retrieve_span.set_attribute("rag.mode", mode.value)
+            retrieve_span.set_attribute("rag.chunks.count", len(candidates))
+            retrieve_span.set_attribute("agent.sub_query", sub_query_index)
 
         # Rerank to top_k
-        reranked = await reranker.rerank(query, candidates, top_k=top_k)
+        with tracer().start_as_current_span("rag.rerank") as rerank_span:
+            reranked = await reranker.rerank(query, candidates, top_k=top_k)
+            rerank_span.set_attribute("rag.reranker", reranker.name)
+            rerank_span.set_attribute("rag.chunks.in", len(candidates))
+            rerank_span.set_attribute("rag.chunks.out", len(reranked))
+            rerank_span.set_attribute("agent.sub_query", sub_query_index)
+            set_usage_attributes(rerank_span, reranker.last_usage)
 
         # Accumulate reranker usage
         accumulated_usage = accumulated_usage + reranker.last_usage

@@ -1,4 +1,4 @@
-.PHONY: install lint format test test-live ingest chat eval eval-retrieval eval-generation eval-agentic verify-guardrails canary report
+.PHONY: install lint format test test-live ingest chat eval eval-retrieval eval-generation eval-agentic verify-guardrails canary report stats demo
 
 # One RUN_ID per make invocation so both eval-generation passes share a results dir.
 RUN_ID ?= $(shell date -u +%Y%m%d-%H%M%SZ)
@@ -61,6 +61,22 @@ canary:
 
 report:
 	uv run python evals/build_report.py
+
+stats:
+	uv run agentic-rag stats
+
+# One-command reviewer path: full local stack (API + Ollama + Jaeger), wait for
+# readiness, then one cited answer. First boot pulls ~5 GB of Ollama models and
+# ingests + indexes the NIST corpus — allow up to 30 minutes on broadband;
+# subsequent runs are seconds.
+demo:
+	docker compose up -d --build
+	@echo "waiting for the API (first boot: model pull + ingest + index)..."
+	@timeout 1800 sh -c 'until curl -sf localhost:8000/health | grep -q "\"index_loaded\":true"; do sleep 5; done'
+	curl -s -X POST localhost:8000/ask \
+		-H "Authorization: Bearer $${AGENTIC_RAG_API__TOKEN:-local-dev-token}" \
+		-H "Content-Type: application/json" \
+		-d '{"question": "What does control AC-2 require?"}' | python3 -m json.tool
 
 eval: eval-retrieval eval-generation
 	uv run python evals/build_report.py \

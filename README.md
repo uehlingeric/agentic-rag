@@ -90,6 +90,41 @@ uv run agentic-rag ask "My SSN is 123-45-6789, what does AC-2 require?" --provid
 make verify-guardrails   # false-positive rate, overhead p50/p95, red-team catch rate
 ```
 
+## Docker: the whole stack, no keys
+
+`make demo` (or `docker compose up`) runs API + Ollama + Jaeger and ends at cited
+answers with zero cloud dependencies. First boot pulls ~5 GB of Ollama models and
+ingests + indexes the NIST corpus — allow up to 30 minutes on broadband; subsequent
+boots are seconds.
+
+```bash
+make demo   # compose up, wait for readiness, one cited answer via the API
+curl -s -X POST localhost:8000/ask \
+  -H "Authorization: Bearer local-dev-token" \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What does control AC-2 require?", "pipeline": "agentic"}'
+open http://localhost:16686   # Jaeger: the request's full span tree
+```
+
+CI smokes the same image with a deterministic stub provider over a committed
+fixture corpus (`docker compose --profile smoke up api-smoke`) — no models, no
+egress.
+
+## API & Observability
+
+`agentic-rag serve` hosts the same library the CLI uses: `POST /ask`
+(vanilla/agentic, SSE streaming), `GET /search`, `GET /stats`, `GET /health`, with
+static bearer auth, per-token rate limiting, and RFC 9457 problem+json errors.
+Refusals are 200 responses keyed by `refusal_reason` — the guardrail worked, that's
+not an error. Guardrails cannot be bypassed over HTTP.
+
+Every pipeline stage emits OpenTelemetry spans (token, cost, chunk-count, verdict
+attributes), and every request lands one row in a SQLite metrics ledger that
+`agentic-rag stats` (or `GET /stats`) aggregates by provider/model/day/source —
+including eval runs, so "what did this project cost" is one query. Span taxonomy
+and the degradation playbook: [docs/observability.md](docs/observability.md);
+design rationale: [ADR-009](docs/adr/009-observability-api-packaging.md).
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
