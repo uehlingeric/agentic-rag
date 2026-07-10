@@ -23,6 +23,9 @@ dependencies = [
     "pydantic>=2.7",
     "pydantic-settings[yaml]>=2.3",
     "httpx>=0.27",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "slowapi>=0.1.9",
     "anthropic[bedrock]>=0.40",
     "openai>=1.50",
     "google-genai>=1.0",
@@ -81,6 +84,7 @@ python_version = "3.12"
 strict = true
 files = [
     "src/agentic_rag/agent",
+    "src/agentic_rag/api",
     "src/agentic_rag/guardrails",
     "src/agentic_rag/providers",
     "src/agentic_rag/retrieval",
@@ -104,6 +108,8 @@ module = [
     "sentence_transformers.*",
     "spacy",
     "spacy.*",
+    "slowapi",
+    "slowapi.*",
 ]
 ignore_missing_imports = true
 

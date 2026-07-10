@@ -603,6 +603,31 @@ def eval_rerank(
 
 
 @app.command()
+def serve(
+    host: str = typer.Option("0.0.0.0", help="Server host."),
+    port: int = typer.Option(8000, help="Server port."),
+) -> None:
+    """Start the FastAPI server."""
+    import uvicorn
+
+    from agentic_rag.api import create_app
+    from agentic_rag.config import get_settings
+
+    settings = get_settings()
+
+    if settings.api.token is None:
+        typer.secho(
+            "Error: AGENTIC_RAG_API__TOKEN must be set",
+            fg="red",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    app_instance = create_app(settings)
+    uvicorn.run(app_instance, host=host, port=port)
+
+
+@app.command()
 def ingest(
     doc: list[str] = typer.Option(  # noqa: B008
         None, "--doc", help="Restrict to specific doc ids (default: full corpus)."
