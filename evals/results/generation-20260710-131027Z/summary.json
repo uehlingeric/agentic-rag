@@ -1,0 +1,475 @@
+{
+  "run_id": "generation-20260710-131027Z",
+  "dataset_version": "v2",
+  "n_examples": 46,
+  "configs": [
+    {
+      "provider": "anthropic",
+      "model": "global.anthropic.claude-sonnet-4-6",
+      "mode": "hybrid",
+      "rerank": "llm",
+      "pipeline": "agentic",
+      "synthesis_prompt": "agent-synthesis.v1",
+      "judge_prompt": "judge.v2",
+      "judge_provider": "google",
+      "judge_model": "gemini-3.5-flash",
+      "n_items": 46,
+      "n_judged": 36,
+      "n_refusals": 10,
+      "n_judge_failures": 0,
+      "refusal_correct_rate": 0.875,
+      "false_refusal_rate": 0.0789,
+      "scores": {
+        "faithfulness": 5,
+        "relevance": 4.8889,
+        "citation_accuracy": 5
+      },
+      "latency_s": {
+        "mean": 53.2368,
+        "p50": 40.9669,
+        "p95": 136.7049
+      },
+      "gen_tokens": {
+        "input": 672890,
+        "output": 48234
+      },
+      "gen_cost_usd": 2.7422,
+      "judge_cost_usd": 0.197,
+      "by_type": {
+        "lookup": {
+          "n": 14,
+          "n_judged": 13,
+          "scores": {
+            "faithfulness": 5,
+            "relevance": 5,
+            "citation_accuracy": 5
+          },
+          "refusal_rate": 0.0714
+        },
+        "multihop": {
+          "n": 10,
+          "n_judged": 9,
+          "scores": {
+            "faithfulness": 5,
+            "relevance": 4.5556,
+            "citation_accuracy": 5
+          },
+          "refusal_rate": 0.1
+        },
+        "synthesis": {
+          "n": 14,
+          "n_judged": 13,
+          "scores": {
+            "faithfulness": 5,
+            "relevance": 5,
+            "citation_accuracy": 5
+          },
+          "refusal_rate": 0.0714
+        },
+        "unanswerable": {
+          "n": 8,
+          "n_judged": 1,
+          "scores": {
+            "faithfulness": 5,
+            "relevance": 5,
+            "citation_accuracy": 5
+          },
+          "refusal_rate": 0.875
+        }
+      },
+      "agent": {
+        "multi_hop_rate": 0.3913,
+        "mean_revisions": 0.1304,
+        "caveat_rate": 0.0
+      }
+    },
+    {
+      "provider": "anthropic",
+      "model": "global.anthropic.claude-sonnet-4-6",
+      "mode": "hybrid",
+      "rerank": "llm",
+      "pipeline": "vanilla",
+      "synthesis_prompt": "synthesis.v2",
+      "judge_prompt": "judge.v2",
+      "judge_provider": "google",
+      "judge_model": "gemini-3.5-flash",
+      "n_items": 46,
+      "n_judged": 33,
+      "n_refusals": 13,
+      "n_judge_failures": 0,
+      "refusal_correct_rate": 0.875,
+      "false_refusal_rate": 0.1579,
+      "scores": {
+        "faithfulness": 5,
+        "relevance": 5,
+        "citation_accuracy": 5
+      },
+      "latency_s": {
+        "mean": 20.1392,
+        "p50": 15.7507,
+        "p95": 53.671
+      },
+      "gen_tokens": {
+        "input": 280735,
+        "output": 30949
+      },
+      "gen_cost_usd": 1.3064,
+      "judge_cost_usd": 0.1577,
+      "by_type": {
+        "lookup": {
+          "n": 14,
+          "n_judged": 13,
+          "scores": {
+            "faithfulness": 5,
+            "relevance": 5,
+            "citation_accuracy": 5
+          },
+          "refusal_rate": 0.0714
+        },
+        "multihop": {
+          "n": 10,
+          "n_judged": 5,
+          "scores": {
+            "faithfulness": 5,
+            "relevance": 5,
+            "citation_accuracy": 5
+          },
+          "refusal_rate": 0.5
+        },
+        "synthesis": {
+          "n": 14,
+          "n_judged": 14,
+          "scores": {
+            "faithfulness": 5,
+            "relevance": 5,
+            "citation_accuracy": 5
+          },
+          "refusal_rate": 0.0
+        },
+        "unanswerable": {
+          "n": 8,
+          "n_judged": 1,
+          "scores": {
+            "faithfulness": 5,
+            "relevance": 5,
+            "citation_accuracy": 5
+          },
+          "refusal_rate": 0.875
+        }
+      },
+      "agent": null
+    },
+    {
+      "provider": "google",
+      "model": "gemini-3.5-flash",
+      "mode": "hybrid",
+      "rerank": "llm",
+      "pipeline": "agentic",
+      "synthesis_prompt": "agent-synthesis.v1",
+      "judge_prompt": "judge.v2",
+      "judge_provider": "anthropic",
+      "judge_model": "global.anthropic.claude-sonnet-4-6",
+      "n_items": 46,
+      "n_judged": 34,
+      "n_refusals": 12,
+      "n_judge_failures": 0,
+      "refusal_correct_rate": 1.0,
+      "false_refusal_rate": 0.1053,
+      "scores": {
+        "faithfulness": 4.7941,
+        "relevance": 4.7647,
+        "citation_accuracy": 4.9412
+      },
+      "latency_s": {
+        "mean": 8.2958,
+        "p50": 7.6946,
+        "p95": 13.4213
+      },
+      "gen_tokens": {
+        "input": 575204,
+        "output": 42545
+      },
+      "gen_cost_usd": 1.2457,
+      "judge_cost_usd": 0.3989,
+      "by_type": {
+        "lookup": {
+          "n": 14,
+          "n_judged": 13,
+          "scores": {
+            "faithfulness": 4.8462,
+            "relevance": 4.6923,
+            "citation_accuracy": 4.9231
+          },
+          "refusal_rate": 0.0714
+        },
+        "multihop": {
+          "n": 10,
+          "n_judged": 8,
+          "scores": {
+            "faithfulness": 4.875,
+            "relevance": 5,
+            "citation_accuracy": 5
+          },
+          "refusal_rate": 0.2
+        },
+        "synthesis": {
+          "n": 14,
+          "n_judged": 13,
+          "scores": {
+            "faithfulness": 4.6923,
+            "relevance": 4.6923,
+            "citation_accuracy": 4.9231
+          },
+          "refusal_rate": 0.0714
+        },
+        "unanswerable": {
+          "n": 8,
+          "n_judged": 0,
+          "scores": {
+            "faithfulness": null,
+            "relevance": null,
+            "citation_accuracy": null
+          },
+          "refusal_rate": 1.0
+        }
+      },
+      "agent": {
+        "multi_hop_rate": 0.4783,
+        "mean_revisions": 0.0217,
+        "caveat_rate": 0.0
+      }
+    },
+    {
+      "provider": "google",
+      "model": "gemini-3.5-flash",
+      "mode": "hybrid",
+      "rerank": "llm",
+      "pipeline": "vanilla",
+      "synthesis_prompt": "synthesis.v2",
+      "judge_prompt": "judge.v2",
+      "judge_provider": "anthropic",
+      "judge_model": "global.anthropic.claude-sonnet-4-6",
+      "n_items": 46,
+      "n_judged": 31,
+      "n_refusals": 15,
+      "n_judge_failures": 0,
+      "refusal_correct_rate": 1.0,
+      "false_refusal_rate": 0.1842,
+      "scores": {
+        "faithfulness": 4.8387,
+        "relevance": 4.6774,
+        "citation_accuracy": 4.8387
+      },
+      "latency_s": {
+        "mean": 4.5124,
+        "p50": 4.3626,
+        "p95": 5.6744
+      },
+      "gen_tokens": {
+        "input": 271138,
+        "output": 27937
+      },
+      "gen_cost_usd": 0.6581,
+      "judge_cost_usd": 0.3307,
+      "by_type": {
+        "lookup": {
+          "n": 14,
+          "n_judged": 12,
+          "scores": {
+            "faithfulness": 4.8333,
+            "relevance": 4.5833,
+            "citation_accuracy": 4.9167
+          },
+          "refusal_rate": 0.1429
+        },
+        "multihop": {
+          "n": 10,
+          "n_judged": 5,
+          "scores": {
+            "faithfulness": 4.6,
+            "relevance": 5,
+            "citation_accuracy": 4.6
+          },
+          "refusal_rate": 0.5
+        },
+        "synthesis": {
+          "n": 14,
+          "n_judged": 14,
+          "scores": {
+            "faithfulness": 4.9286,
+            "relevance": 4.6429,
+            "citation_accuracy": 4.8571
+          },
+          "refusal_rate": 0.0
+        },
+        "unanswerable": {
+          "n": 8,
+          "n_judged": 0,
+          "scores": {
+            "faithfulness": null,
+            "relevance": null,
+            "citation_accuracy": null
+          },
+          "refusal_rate": 1.0
+        }
+      },
+      "agent": null
+    },
+    {
+      "provider": "ollama",
+      "model": "llama3.1:8b",
+      "mode": "hybrid",
+      "rerank": "llm",
+      "pipeline": "agentic",
+      "synthesis_prompt": "agent-synthesis.v1",
+      "judge_prompt": "judge.v2",
+      "judge_provider": "anthropic",
+      "judge_model": "global.anthropic.claude-sonnet-4-6",
+      "n_items": 46,
+      "n_judged": 39,
+      "n_refusals": 7,
+      "n_judge_failures": 0,
+      "refusal_correct_rate": 0.75,
+      "false_refusal_rate": 0.0263,
+      "scores": {
+        "faithfulness": 2.5128,
+        "relevance": 3.0256,
+        "citation_accuracy": 2.4103
+      },
+      "latency_s": {
+        "mean": 22.453,
+        "p50": 19.6383,
+        "p95": 49.1363
+      },
+      "gen_tokens": {
+        "input": 456194,
+        "output": 35053
+      },
+      "gen_cost_usd": 0.0,
+      "judge_cost_usd": 0.3518,
+      "by_type": {
+        "lookup": {
+          "n": 14,
+          "n_judged": 13,
+          "scores": {
+            "faithfulness": 3.3077,
+            "relevance": 3.2308,
+            "citation_accuracy": 3.4615
+          },
+          "refusal_rate": 0.0714
+        },
+        "multihop": {
+          "n": 10,
+          "n_judged": 10,
+          "scores": {
+            "faithfulness": 1.9,
+            "relevance": 2.9,
+            "citation_accuracy": 1.5
+          },
+          "refusal_rate": 0.0
+        },
+        "synthesis": {
+          "n": 14,
+          "n_judged": 14,
+          "scores": {
+            "faithfulness": 2.0714,
+            "relevance": 3,
+            "citation_accuracy": 2.0714
+          },
+          "refusal_rate": 0.0
+        },
+        "unanswerable": {
+          "n": 8,
+          "n_judged": 2,
+          "scores": {
+            "faithfulness": 3.5,
+            "relevance": 2.5,
+            "citation_accuracy": 2.5
+          },
+          "refusal_rate": 0.75
+        }
+      },
+      "agent": {
+        "multi_hop_rate": 0.587,
+        "mean_revisions": 0.4783,
+        "caveat_rate": 0.1739
+      }
+    },
+    {
+      "provider": "ollama",
+      "model": "llama3.1:8b",
+      "mode": "hybrid",
+      "rerank": "llm",
+      "pipeline": "vanilla",
+      "synthesis_prompt": "synthesis.v2",
+      "judge_prompt": "judge.v2",
+      "judge_provider": "anthropic",
+      "judge_model": "global.anthropic.claude-sonnet-4-6",
+      "n_items": 46,
+      "n_judged": 37,
+      "n_refusals": 9,
+      "n_judge_failures": 0,
+      "refusal_correct_rate": 0.75,
+      "false_refusal_rate": 0.0789,
+      "scores": {
+        "faithfulness": 2.973,
+        "relevance": 3.1351,
+        "citation_accuracy": 3.0811
+      },
+      "latency_s": {
+        "mean": 11.0978,
+        "p50": 10.0648,
+        "p95": 20.9221
+      },
+      "gen_tokens": {
+        "input": 228693,
+        "output": 18146
+      },
+      "gen_cost_usd": 0.0,
+      "judge_cost_usd": 0.3482,
+      "by_type": {
+        "lookup": {
+          "n": 14,
+          "n_judged": 13,
+          "scores": {
+            "faithfulness": 3.1538,
+            "relevance": 3.4615,
+            "citation_accuracy": 3.6154
+          },
+          "refusal_rate": 0.0714
+        },
+        "multihop": {
+          "n": 10,
+          "n_judged": 8,
+          "scores": {
+            "faithfulness": 2.5,
+            "relevance": 2.625,
+            "citation_accuracy": 2.375
+          },
+          "refusal_rate": 0.2
+        },
+        "synthesis": {
+          "n": 14,
+          "n_judged": 14,
+          "scores": {
+            "faithfulness": 2.9286,
+            "relevance": 3.2857,
+            "citation_accuracy": 2.7857
+          },
+          "refusal_rate": 0.0
+        },
+        "unanswerable": {
+          "n": 8,
+          "n_judged": 2,
+          "scores": {
+            "faithfulness": 4,
+            "relevance": 2,
+            "citation_accuracy": 4.5
+          },
+          "refusal_rate": 0.75
+        }
+      },
+      "agent": null
+    }
+  ]
+}
