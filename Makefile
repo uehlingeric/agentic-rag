@@ -1,4 +1,4 @@
-.PHONY: install lint format test test-live ingest chat eval eval-retrieval eval-generation eval-agentic verify-guardrails canary report
+.PHONY: install lint format test test-live ingest chat eval eval-retrieval eval-generation eval-agentic verify-guardrails canary report stats
 
 # One RUN_ID per make invocation so both eval-generation passes share a results dir.
 RUN_ID ?= $(shell date -u +%Y%m%d-%H%M%SZ)
@@ -61,6 +61,9 @@ canary:
 
 report:
 	uv run python evals/build_report.py
+
+stats:
+	uv run agentic-rag stats
 
 eval: eval-retrieval eval-generation
 	uv run python evals/build_report.py \

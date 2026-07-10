@@ -39,4 +39,8 @@ chunking:
 #   sample_ratio: 1.0            # head sampling (0.0 = no traces, 1.0 = all traces)
 #   service_name: agentic-rag    # tags all traces; defaults to agentic-rag
 
+# metrics:                        # on by default; per-request SQLite ledger
+#   enabled: true                # turn off to disable all metrics recording
+#   db_path: data/metrics.db     # defaults to {data_dir}/metrics.db
+
 data_dir: data

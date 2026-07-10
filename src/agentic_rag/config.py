@@ -154,6 +154,20 @@ class ObservabilitySettings(BaseModel):
     service_name: str = "agentic-rag"
 
 
+class MetricsSettings(BaseModel):
+    """Per-request metrics recording to SQLite ledger.
+
+    One SQLite row per request (CLI/API) or eval LLM interaction; aggregation
+    happens at query time via ``agentic-rag stats``. The ledger lives under
+    ``data_dir`` by default, is append-only, and uses WAL + busy_timeout for
+    safe concurrent writes from multiple API workers (no in-process state lost
+    on crash).
+    """
+
+    enabled: bool = True
+    db_path: Path | None = None
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="AGENTIC_RAG_",
@@ -177,6 +191,7 @@ class Settings(BaseSettings):
     judge: JudgeSettings = JudgeSettings()
     retry: RetrySettings = RetrySettings()
     observability: ObservabilitySettings = ObservabilitySettings()
+    metrics: MetricsSettings = MetricsSettings()
     data_dir: Path = Path("data")
 
     @classmethod
