@@ -1,0 +1,22 @@
+{
+  "run_id": "20260710-212006Z",
+  "url": "http://127.0.0.1:8123",
+  "n": 20,
+  "concurrency": 20,
+  "wall_s": 34.209,
+  "succeeded": 20,
+  "failed": 0,
+  "refusals": 0,
+  "latency_s": {
+    "p50": 18.631,
+    "p95": 32.649,
+    "min": 1.725,
+    "max": 34.19,
+    "mean": 18.836
+  },
+  "integrity": {
+    "unique_request_ids": true,
+    "non_refusals_have_citations": true
+  },
+  "errors": []
+}
