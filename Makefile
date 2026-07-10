@@ -1,4 +1,4 @@
-.PHONY: install lint format test test-live ingest chat eval eval-retrieval eval-generation eval-agentic report
+.PHONY: install lint format test test-live ingest chat eval eval-retrieval eval-generation eval-agentic verify-guardrails canary report
 
 # One RUN_ID per make invocation so both eval-generation passes share a results dir.
 RUN_ID ?= $(shell date -u +%Y%m%d-%H%M%SZ)
@@ -48,6 +48,16 @@ eval-agentic:
 		--provider ollama --provider anthropic --provider google \
 		--mode hybrid --rerank llm \
 		--pipeline vanilla --pipeline agentic
+
+# Week-6 guardrail verification: false-positive rate, overhead p50/p95, red-team
+# catch rate. No LLM calls, no cost.
+verify-guardrails:
+	uv run python evals/run_guardrails.py
+
+# Live corpus-poisoning canary (requires a running provider; local path is free).
+# Re-records the cassettes that test_canary_playback.py replays in CI.
+canary:
+	uv run python evals/run_canary.py --provider ollama
 
 report:
 	uv run python evals/build_report.py
