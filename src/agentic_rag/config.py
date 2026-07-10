@@ -137,6 +137,23 @@ class RetrySettings(BaseModel):
     max_backoff_s: float = 30.0
 
 
+class ObservabilitySettings(BaseModel):
+    """OpenTelemetry tracing configuration.
+
+    Instrumentation is always compiled in; spans are no-ops until setup_tracing()
+    installs a real TracerProvider. ``exporter`` determines the backend: "console"
+    emits to stderr (debugging); "otlp" exports to an OTLP/HTTP endpoint (Jaeger
+    integration via ``otlp_endpoint``). ``sample_ratio`` controls head sampling
+    via ParentBased(TraceIdRatioBased); ``service_name`` tags all traces.
+    """
+
+    enabled: bool = False
+    exporter: str = "console"
+    otlp_endpoint: str = "http://localhost:4318"
+    sample_ratio: float = 1.0
+    service_name: str = "agentic-rag"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="AGENTIC_RAG_",
@@ -159,6 +176,7 @@ class Settings(BaseSettings):
     guardrails: GuardrailsSettings = GuardrailsSettings()
     judge: JudgeSettings = JudgeSettings()
     retry: RetrySettings = RetrySettings()
+    observability: ObservabilitySettings = ObservabilitySettings()
     data_dir: Path = Path("data")
 
     @classmethod

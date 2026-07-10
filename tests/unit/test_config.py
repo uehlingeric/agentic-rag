@@ -44,3 +44,21 @@ def test_usage_addition() -> None:
     assert (
         Usage(input_tokens=1, output_tokens=1) + Usage(input_tokens=1, output_tokens=1)
     ).cost_usd is None
+
+
+def test_observability_defaults() -> None:
+    from agentic_rag.config import ObservabilitySettings
+
+    obs = ObservabilitySettings()
+    assert obs.enabled is False
+    assert obs.exporter == "console"
+    assert obs.otlp_endpoint == "http://localhost:4318"
+    assert obs.sample_ratio == 1.0
+    assert obs.service_name == "agentic-rag"
+
+
+def test_observability_in_settings() -> None:
+    s = Settings()
+    assert s.observability is not None
+    assert s.observability.enabled is False
+    assert s.observability.exporter == "console"
