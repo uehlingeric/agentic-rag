@@ -72,6 +72,24 @@ uv run agentic-rag chat "hello" --provider ollama
 
 Live provider smoke tests (require keys / a running Ollama): `make test-live`.
 
+## Guardrails
+
+Every question runs through a safety sandwich by default — input PII/injection scan →
+pipeline → output PII scan → schema-versioned audit record. The design is deliberately
+honest: injection screening is a documented mitigation, not a solve, and the published
+red-team catch rate (30/30 expect-catch cases, 7 annotated known misses) reflects that.
+Guardrails add **p50 0.16 ms** on the local path and block **0 of 50** clean golden
+questions. See [docs/guardrails.md](docs/guardrails.md), the audit schema in
+[docs/audit-log.md](docs/audit-log.md), and the rationale in
+[ADR-008](docs/adr/008-guardrails-design.md).
+
+```bash
+uv run agentic-rag ask "What does control AC-2 require?" --provider ollama
+uv run agentic-rag ask "My SSN is 123-45-6789, what does AC-2 require?" --provider ollama
+#   → blocked by the input guardrail (refusal_reason: input_pii)
+make verify-guardrails   # false-positive rate, overhead p50/p95, red-team catch rate
+```
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
