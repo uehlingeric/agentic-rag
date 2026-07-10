@@ -33,6 +33,7 @@ underlying pipeline, not guardrail overhead.
 from __future__ import annotations
 
 import dataclasses
+import sys
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -50,6 +51,7 @@ from agentic_rag.guardrails.pii import PIIScanner
 from agentic_rag.guardrails.policy import apply_policy, load_policy
 from agentic_rag.guardrails.refusal import render_refusal
 from agentic_rag.observability import set_usage_attributes, tracer
+from agentic_rag.observability.metrics import RequestMetric, metrics_store_for
 from agentic_rag.pipeline.base import Answer, CitedChunk, StageTiming
 from agentic_rag.pipeline.pipeline import RAGPipeline
 from agentic_rag.providers.base import Usage
@@ -122,7 +124,13 @@ class GuardedPipeline:
     """
 
     def __init__(
-        self, inner: RAGPipeline | AgenticPipeline, settings: Settings, *, provider: str, model: str
+        self,
+        inner: RAGPipeline | AgenticPipeline,
+        settings: Settings,
+        *,
+        provider: str,
+        model: str,
+        source: str = "cli",
     ) -> None:
         """Initialize the guarded pipeline.
 
@@ -131,11 +139,13 @@ class GuardedPipeline:
             settings: Application settings (guardrails, audit dirs, etc).
             provider: Provider name for audit records (e.g., "anthropic").
             model: Model identifier for audit records.
+            source: Metrics source identifier (default "cli").
         """
         self.inner = inner
         self.settings = settings
         self.provider = provider
         self.model = model
+        self.source = source
 
         self.policy = load_policy(settings.guardrails.policy_file)
         self.pii = PIIScanner(ner=settings.guardrails.ner)
@@ -143,6 +153,7 @@ class GuardedPipeline:
 
         audit_dir = settings.guardrails.audit_dir or settings.data_dir / "audit"
         self.audit_writer = AuditWriter(audit_dir) if settings.guardrails.audit_enabled else None
+        self.metrics = metrics_store_for(settings)
 
     async def ask(
         self, question: str, *, mode: RetrievalMode = RetrievalMode.HYBRID
@@ -243,6 +254,35 @@ class GuardedPipeline:
                     answer_sha256=None,
                 )
                 audit_path = self.audit_writer.write(audit_record) if self.audit_writer else None
+
+                # Record metrics (don't let failures break requests)
+                if self.metrics is not None:
+                    try:
+                        metric = RequestMetric(
+                            request_id=request_id,
+                            ts=ts,
+                            source=self.source,
+                            provider=self.provider,
+                            model=self.model,
+                            pipeline="agentic"
+                            if isinstance(self.inner, AgenticPipeline)
+                            else "vanilla",
+                            mode=mode.value,
+                            rerank=self.inner.settings.rerank.mode,
+                            input_tokens=0,
+                            output_tokens=0,
+                            cost_usd=None,
+                            latency_s=elapsed_in,
+                            stages={"guardrails_in": elapsed_in},
+                            refusal=True,
+                            refusal_reason=reason.value,
+                        )
+                        self.metrics.record(metric)
+                    except Exception as exc:
+                        print(
+                            f"metrics record failed: {exc}",
+                            file=sys.stderr,
+                        )
 
                 root_span.set_attribute("rag.refusal", True)
                 root_span.set_attribute("rag.refusal_reason", reason.value)
@@ -367,6 +407,35 @@ class GuardedPipeline:
                 answer_sha256=answer_sha256,
             )
             audit_path = self.audit_writer.write(audit_record) if self.audit_writer else None
+
+            # Record metrics (don't let failures break requests)
+            if self.metrics is not None:
+                try:
+                    # stages = latency_timings minus "total"
+                    stages = {k: v for k, v in latency_timings.items() if k != "total"}
+                    metric = RequestMetric(
+                        request_id=request_id,
+                        ts=ts,
+                        source=self.source,
+                        provider=self.provider,
+                        model=self.model,
+                        pipeline="agentic" if agent_meta else "vanilla",
+                        mode=mode.value,
+                        rerank=self.inner.settings.rerank.mode,
+                        input_tokens=final_answer.usage.input_tokens,
+                        output_tokens=final_answer.usage.output_tokens,
+                        cost_usd=final_answer.usage.cost_usd,
+                        latency_s=latency_timings["total"],
+                        stages=stages,
+                        refusal=final_answer.refusal,
+                        refusal_reason=final_answer.refusal_reason,
+                    )
+                    self.metrics.record(metric)
+                except Exception as exc:
+                    print(
+                        f"metrics record failed: {exc}",
+                        file=sys.stderr,
+                    )
 
             # Set final root span attributes
             root_span.set_attribute("rag.refusal", final_answer.refusal)
@@ -493,6 +562,33 @@ class GuardedPipeline:
                     audit_path = (
                         self.audit_writer.write(audit_record) if self.audit_writer else None
                     )
+
+                    # Record metrics (don't let failures break requests)
+                    if self.metrics is not None:
+                        try:
+                            metric = RequestMetric(
+                                request_id=request_id,
+                                ts=ts,
+                                source=self.source,
+                                provider=self.provider,
+                                model=self.model,
+                                pipeline="vanilla",
+                                mode=mode.value,
+                                rerank=self.inner.settings.rerank.mode,
+                                input_tokens=0,
+                                output_tokens=0,
+                                cost_usd=None,
+                                latency_s=elapsed_in,
+                                stages={"guardrails_in": elapsed_in},
+                                refusal=True,
+                                refusal_reason=reason.value,
+                            )
+                            self.metrics.record(metric)
+                        except Exception as exc:
+                            print(
+                                f"metrics record failed: {exc}",
+                                file=sys.stderr,
+                            )
 
                     root_span.set_attribute("rag.refusal", True)
                     root_span.set_attribute("rag.refusal_reason", reason.value)
@@ -623,6 +719,35 @@ class GuardedPipeline:
                         audit_path = (
                             self.audit_writer.write(audit_record) if self.audit_writer else None
                         )
+
+                        # Record metrics (don't let failures break requests)
+                        if self.metrics is not None:
+                            try:
+                                # stages = latency_timings minus "total"
+                                stages = {k: v for k, v in latency_timings.items() if k != "total"}
+                                metric = RequestMetric(
+                                    request_id=request_id,
+                                    ts=ts,
+                                    source=self.source,
+                                    provider=self.provider,
+                                    model=self.model,
+                                    pipeline="vanilla",
+                                    mode=mode.value,
+                                    rerank=self.inner.settings.rerank.mode,
+                                    input_tokens=processed_answer.usage.input_tokens,
+                                    output_tokens=processed_answer.usage.output_tokens,
+                                    cost_usd=processed_answer.usage.cost_usd,
+                                    latency_s=latency_timings["total"],
+                                    stages=stages,
+                                    refusal=processed_answer.refusal,
+                                    refusal_reason=processed_answer.refusal_reason,
+                                )
+                                self.metrics.record(metric)
+                            except Exception as exc:
+                                print(
+                                    f"metrics record failed: {exc}",
+                                    file=sys.stderr,
+                                )
 
                         # Set final root span attributes
                         root_span.set_attribute("rag.refusal", processed_answer.refusal)

@@ -619,3 +619,47 @@ def ingest(
         f"Ingested {len(manifest.documents)} documents, "
         f"{manifest.total_chunks} chunks -> {manifest.output_path}"
     )
+
+
+@app.command()
+def stats(
+    by: str = typer.Option("provider", help="Group by: provider|model|day|source|pipeline."),
+    since: str | None = typer.Option(None, help="Filter to ts >= YYYY-MM-DD (optional)."),
+    stages: bool = typer.Option(False, "--stages", help="Also show per-stage latency table."),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON instead of markdown."),
+) -> None:
+    """Display aggregated metrics from the SQLite ledger."""
+    import json
+
+    from agentic_rag.config import get_settings
+    from agentic_rag.observability.metrics import metrics_store_for
+
+    settings = get_settings()
+    store = metrics_store_for(settings)
+
+    if store is None:
+        typer.secho("metrics are disabled (settings.metrics.enabled = false)", fg="red", err=True)
+        raise typer.Exit(1)
+
+    if not store.db_path.exists():
+        typer.secho(
+            f"no metrics database found at {store.db_path}; run some queries first",
+            fg="yellow",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    summary_rows = store.summary(since=since, group=by)
+    stage_rows = store.stage_summary(since=since) if stages else []
+
+    if json_out:
+        output = {
+            "summary": summary_rows,
+            "stages": stage_rows if stages else None,
+        }
+        typer.echo(json.dumps(output, indent=2))
+    else:
+        typer.echo(store.format_summary(summary_rows, group=by))
+        if stages:
+            typer.echo()
+            typer.echo(store.format_stages(stage_rows))
