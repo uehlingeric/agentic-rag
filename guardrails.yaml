@@ -1,0 +1,54 @@
+# Guardrail policy — conservative federal posture (ADR-008).
+#
+# This file is the reference copy of the built-in defaults. To customize,
+# copy or edit it and point settings at it in config.yaml:
+#   guardrails:
+#     policy_file: guardrails.yaml
+# Actions: block | redact | flag.
+#   block  — refuse the request (input) or withhold the answer (output)
+#   redact — substitute [REDACTED:{ENTITY}] and proceed
+#   flag   — proceed unchanged; the detection is recorded in the audit log
+version: 1
+
+pii:
+  input:
+    ssn: block
+    ein: block
+    credit_card: block
+    phone: redact
+    email: redact
+    # IPs are flag-only: NIST publications legitimately discuss example
+    # addresses, and queries about network controls may quote them.
+    ip: flag
+    # NER entities (person/org) are flag-only: NER is too false-positive-prone
+    # on standards prose to block or rewrite queries with.
+    person: flag
+    org: flag
+  output:
+    ssn: redact
+    ein: redact
+    credit_card: redact
+    phone: redact
+    email: redact
+    ip: flag
+    person: flag
+    org: flag
+
+injection:
+  # Action for injection patterns detected in the user query.
+  input: block
+  # Action for injection patterns detected in retrieved chunks. Flag-only by
+  # default: the corpus is trusted NIST text, and the synthesis prompt already
+  # treats excerpt content as data, not instructions (see docs/guardrails.md).
+  retrieved: flag
+
+templates:
+  input_pii: >-
+    This request was blocked by the input guardrail: it appears to contain
+    {entities}. Remove the sensitive value(s) and ask again.
+  input_injection: >-
+    This request was blocked by the input guardrail: it matches
+    prompt-injection patterns ({categories}).
+  output_pii: >-
+    The generated answer was withheld by the output guardrail: it contained
+    {entities}.

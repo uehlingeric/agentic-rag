@@ -98,6 +98,10 @@ class Answer:
     post-rerank chunk list shown to the model (marker n == context[n-1]).
     ``usage`` sums all LLM calls (rerank + synthesis). ``refusal`` is True when
     the model correctly reported the corpus cannot answer.
+
+    ``refusal_reason`` is a machine-readable reason set by the guardrails
+    layer (``agentic_rag.guardrails.base.RefusalReason`` values: out_of_corpus,
+    input_pii, input_injection, output_pii); None when guardrails are disabled.
     """
 
     text: str
@@ -107,3 +111,4 @@ class Answer:
     timings: list[StageTiming] = field(default_factory=list)
     refusal: bool = False
     invalid_citations: list[int] = field(default_factory=list)
+    refusal_reason: str | None = None
