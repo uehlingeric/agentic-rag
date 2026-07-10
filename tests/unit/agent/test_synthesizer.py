@@ -112,7 +112,7 @@ async def test_first_pass_single_user_message() -> None:
     # Verify result
     assert result.text == "An answer from context."
     assert result.refusal is False
-    assert result.trailing_sentinel is False
+    assert result.stray_sentinel is False
     assert result.usage.input_tokens == 100
     assert result.model == "stub-model"
 
@@ -132,7 +132,7 @@ async def test_leading_sentinel_marks_refusal() -> None:
 
     assert result.refusal is True
     assert result.text == "The context does not contain relevant information."
-    assert result.trailing_sentinel is False
+    assert result.stray_sentinel is False
 
 
 @pytest.mark.asyncio
@@ -150,12 +150,12 @@ async def test_only_leading_sentinel_is_empty_refusal() -> None:
 
     assert result.refusal is True
     assert result.text == ""
-    assert result.trailing_sentinel is False
+    assert result.stray_sentinel is False
 
 
 @pytest.mark.asyncio
-async def test_trailing_sentinel_without_refusal() -> None:
-    """Reply ending with [NO_ANSWER] is marked with trailing_sentinel, not refusal."""
+async def test_stray_sentinel_without_refusal() -> None:
+    """Reply ending with [NO_ANSWER] is marked with stray_sentinel, not refusal."""
     reply = f"Organizations must implement control measures [1]. {NO_ANSWER_SENTINEL}"
     llm = StubLLM([reply])
     context = BuiltContext(text="[1] chunk content", chunks=[], token_count=5)
@@ -167,13 +167,13 @@ async def test_trailing_sentinel_without_refusal() -> None:
     )
 
     assert result.refusal is False
-    assert result.trailing_sentinel is True
+    assert result.stray_sentinel is True
     assert result.text == "Organizations must implement control measures [1]."
 
 
 @pytest.mark.asyncio
-async def test_trailing_sentinel_with_whitespace() -> None:
-    """Trailing sentinel followed by whitespace is correctly stripped."""
+async def test_stray_sentinel_with_whitespace() -> None:
+    """Stray sentinel followed by whitespace is correctly stripped."""
     reply = f"Some answer [2].  {NO_ANSWER_SENTINEL}  \n"
     llm = StubLLM([reply])
     context = BuiltContext(text="[2] content", chunks=[], token_count=5)
@@ -185,7 +185,7 @@ async def test_trailing_sentinel_with_whitespace() -> None:
     )
 
     assert result.refusal is False
-    assert result.trailing_sentinel is True
+    assert result.stray_sentinel is True
     assert result.text == "Some answer [2]."
 
 
@@ -336,7 +336,7 @@ async def test_temperature_zero_enforced() -> None:
 
 @pytest.mark.asyncio
 async def test_prompt_id_is_agent_synthesis() -> None:
-    """Prompt ID is agent-synthesis.v1."""
+    """Prompt ID is agent-synthesis.v2."""
     llm = StubLLM(["Answer."])
     context = BuiltContext(text="[1] content", chunks=[], token_count=5)
 
@@ -346,12 +346,12 @@ async def test_prompt_id_is_agent_synthesis() -> None:
         context=context,
     )
 
-    assert result.prompt_id == "agent-synthesis.v1"
+    assert result.prompt_id == "agent-synthesis.v2"
 
 
 @pytest.mark.asyncio
-async def test_no_trailing_sentinel_on_normal_answer() -> None:
-    """Normal answer without sentinel has trailing_sentinel=False."""
+async def test_no_stray_sentinel_on_normal_answer() -> None:
+    """Normal answer without sentinel has stray_sentinel=False."""
     llm = StubLLM(["Normal answer without any sentinel."])
     context = BuiltContext(text="[1] content", chunks=[], token_count=5)
 
@@ -362,12 +362,12 @@ async def test_no_trailing_sentinel_on_normal_answer() -> None:
     )
 
     assert result.refusal is False
-    assert result.trailing_sentinel is False
+    assert result.stray_sentinel is False
     assert result.text == "Normal answer without any sentinel."
 
 
 @pytest.mark.asyncio
-async def test_leading_and_trailing_sentinel_both_present() -> None:
+async def test_leading_and_stray_sentinel_both_present() -> None:
     """If answer starts with sentinel, leading takes precedence (refusal=True)."""
     # Edge case: starts and ends with sentinel
     reply = f"{NO_ANSWER_SENTINEL} some text {NO_ANSWER_SENTINEL}"
@@ -383,5 +383,48 @@ async def test_leading_and_trailing_sentinel_both_present() -> None:
     # Leading sentinel makes it a refusal
     assert result.refusal is True
     # After stripping leading, remaining text is "some text [NO_ANSWER]"
-    # Then trailing sentinel detection finds [NO_ANSWER] at the end
-    assert result.trailing_sentinel is True
+    # Then stray sentinel detection finds [NO_ANSWER] in the remaining text
+    assert result.stray_sentinel is True
+
+
+@pytest.mark.asyncio
+async def test_mid_answer_sentinel() -> None:
+    """Test mid-answer sentinel: partial answer, sentinel, then caveat."""
+    reply = "Partial claim [1].\n\n[NO_ANSWER] The excerpts do not state X."
+    llm = StubLLM([reply])
+    context = BuiltContext(text="[1] content", chunks=[], token_count=5)
+
+    result = await synthesize_draft(
+        llm,
+        question="What is X?",
+        context=context,
+    )
+
+    # Should NOT be a refusal (sentinel is not leading)
+    assert result.refusal is False
+    # Should mark stray sentinel
+    assert result.stray_sentinel is True
+    # Text should keep both claim and caveat, no sentinel
+    assert "Partial claim [1]." in result.text
+    assert "The excerpts do not state X." in result.text
+    assert NO_ANSWER_SENTINEL not in result.text
+
+
+@pytest.mark.asyncio
+async def test_inline_mid_sentence_sentinel() -> None:
+    """Test sentinel inline mid-sentence."""
+    reply = "maintaining them [NO_ANSWER] The excerpts do not state Y."
+    llm = StubLLM([reply])
+    context = BuiltContext(text="[1] content", chunks=[], token_count=5)
+
+    result = await synthesize_draft(
+        llm,
+        question="What?",
+        context=context,
+    )
+
+    assert result.refusal is False
+    assert result.stray_sentinel is True
+    # Text should be joined with single space
+    assert result.text == "maintaining them The excerpts do not state Y."
+    assert NO_ANSWER_SENTINEL not in result.text

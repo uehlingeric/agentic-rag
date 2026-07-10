@@ -742,6 +742,7 @@ def build(
             params={},
         ),
         Fragment(Path("docs/fragments/benchmarks/09-week5-analysis.md")),
+        Fragment(Path("docs/fragments/benchmarks/10-week6-guardrails.md")),
         Fragment(Path("docs/fragments/benchmarks/06-reproduce.md")),
     ]
 

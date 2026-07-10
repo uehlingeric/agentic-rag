@@ -49,6 +49,9 @@ dev = [
 rerank-local = [
     "sentence-transformers>=3.0",
 ]
+guardrails-ner = [
+    "spacy>=3.7",
+]
 
 [project.scripts]
 agentic-rag = "agentic_rag.cli:app"
@@ -75,6 +78,7 @@ python_version = "3.12"
 strict = true
 files = [
     "src/agentic_rag/agent",
+    "src/agentic_rag/guardrails",
     "src/agentic_rag/providers",
     "src/agentic_rag/retrieval",
     "src/agentic_rag/evals",
@@ -94,6 +98,8 @@ module = [
     "pyarrow.*",
     "sentence_transformers",
     "sentence_transformers.*",
+    "spacy",
+    "spacy.*",
 ]
 ignore_missing_imports = true
 

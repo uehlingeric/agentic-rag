@@ -100,6 +100,26 @@ class AgentSettings(BaseModel):
     critic_max_tokens: int = 1024
 
 
+class GuardrailsSettings(BaseModel):
+    """Input/output guardrails and audit logging (ADR-008).
+
+    ``policy_file`` optionally overrides the built-in conservative policy
+    (see ``guardrails.yaml`` at the repo root for the reference copy);
+    ``ner`` enables the spaCy NER layer (requires the [guardrails-ner]
+    extra plus ``python -m spacy download en_core_web_sm``). ``log_raw_query``
+    writes the raw query into audit records — off by default, the record
+    carries only a SHA-256; see docs/audit-log.md for the tradeoff.
+    ``audit_dir`` defaults to ``{data_dir}/audit``.
+    """
+
+    enabled: bool = True
+    ner: bool = False
+    policy_file: Path | None = None
+    audit_enabled: bool = True
+    audit_dir: Path | None = None
+    log_raw_query: bool = False
+
+
 class JudgeSettings(BaseModel):
     """LLM-as-judge scoring (ADR-006). An answer is scored by the first entry in
     ``providers`` that differs from the provider that generated it, so headline
@@ -136,6 +156,7 @@ class Settings(BaseSettings):
     rerank: RerankSettings = RerankSettings()
     synthesis: SynthesisSettings = SynthesisSettings()
     agent: AgentSettings = AgentSettings()
+    guardrails: GuardrailsSettings = GuardrailsSettings()
     judge: JudgeSettings = JudgeSettings()
     retry: RetrySettings = RetrySettings()
     data_dir: Path = Path("data")
