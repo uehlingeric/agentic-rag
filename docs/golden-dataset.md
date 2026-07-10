@@ -18,6 +18,9 @@ Each line in `evals/golden/v1.jsonl` is a JSON object with these exact fields:
   - For unanswerable: empty array
 - **difficulty** (string): `"easy"` | `"medium"` | `"hard"`
 - **type** (string): `"lookup"` | `"synthesis"` | `"multihop"` | `"unanswerable"`
+- **held_out** (boolean, optional, default false): marks items used verbatim as few-shot
+  examples inside pipeline prompts (see "Held-out planner few-shot items" below).
+  Generation evals exclude held-out items; retrieval evals keep them.
 
 ## Authoring Criteria
 
@@ -160,6 +163,18 @@ SP 800-171r3 coverage brought closer to parity with SP 800-53r5.
 - **v2**: 42 answerable, 8 unanswerable (84% / 16%)
 
 The slight increase in unanswerable items maintains representation of near-miss queries an analyst might pose but the corpus cannot fully address.
+
+#### Held-out planner few-shot items (week 5)
+
+The agentic planner prompt (`planner.v1`) uses four golden questions verbatim as
+few-shot examples: v1-q02 and v1-q06 (lookup, shown as `direct`) and v1-q21 and v1-q22
+(multihop, shown decomposed as `multi_hop`). Scoring the pipeline on questions its own
+prompt contains would be training on the test, so these four carry `"held_out": true`
+and are excluded from generation eval runs — the week-5 comparative benchmark therefore
+runs on 46 items (14 lookup, 14 synthesis, 10 multihop, 8 unanswerable). Retrieval
+evals still include them: no retrieval prompt ever sees golden questions. Question
+text, answers, and IDs are unchanged, so pre-week-5 results on the full 50 remain
+interpretable; cross-week comparisons should use the 46-item intersection.
 
 ### Future Versions
 

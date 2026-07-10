@@ -14,6 +14,7 @@ from agentic_rag.evals.report import (
     _find_bold_maxima,
     _round_4dp,
     build,
+    render_agentic_comparison,
     render_generation_section,
     render_rerank_table,
     render_retrieval_table,
@@ -603,3 +604,223 @@ class TestRenderGenerationSection:
 
         assert "Refusal correctness is reported separately" in output
         assert "never averaged into them" in output
+
+
+class TestRenderAgenticComparison:
+    """Test agentic vs. vanilla comparison rendering."""
+
+    def test_renders_headline_table(self, tmp_path: Path) -> None:
+        """Test headline table with both pipelines."""
+        summary = {
+            "run_id": "test-run",
+            "dataset_version": "v2",
+            "n_examples": 10,
+            "configs": [
+                {
+                    "provider": "anthropic",
+                    "model": "claude-sonnet-5",
+                    "mode": "hybrid",
+                    "rerank": "none",
+                    "pipeline": "vanilla",
+                    "synthesis_prompt": "synthesis.v2",
+                    "scores": {
+                        "faithfulness": 0.8,
+                        "relevance": 0.85,
+                        "citation_accuracy": 0.75,
+                    },
+                    "false_refusal_rate": 0.1,
+                    "refusal_correct_rate": 0.9,
+                    "latency_s": {"p50": 1.5},
+                    "gen_cost_usd": 10.0,
+                    "by_type": {},
+                    "agent": None,
+                },
+                {
+                    "provider": "anthropic",
+                    "model": "claude-sonnet-5",
+                    "mode": "hybrid",
+                    "rerank": "none",
+                    "pipeline": "agentic",
+                    "synthesis_prompt": "agent-synthesis.v1",
+                    "scores": {
+                        "faithfulness": 0.85,
+                        "relevance": 0.88,
+                        "citation_accuracy": 0.78,
+                    },
+                    "false_refusal_rate": 0.05,
+                    "refusal_correct_rate": 0.95,
+                    "latency_s": {"p50": 2.0},
+                    "gen_cost_usd": 20.0,
+                    "by_type": {},
+                    "agent": {
+                        "multi_hop_rate": 0.5,
+                        "mean_revisions": 0.8,
+                        "caveat_rate": 0.1,
+                    },
+                },
+            ],
+        }
+        json_file = tmp_path / "summary.json"
+        with json_file.open("w") as f:
+            json.dump(summary, f)
+
+        output = render_agentic_comparison(json_file)
+
+        # Check headline table has key content
+        assert "## Agentic vs. Vanilla Comparison" in output
+        assert "Provider" in output
+        assert "Pipeline" in output
+        assert "anthropic" in output
+        assert "vanilla" in output
+        assert "agentic" in output
+        # Check values in headline table
+        assert "| anthropic | vanilla | 0.80" in output  # vanilla faithfulness
+        assert "| anthropic | agentic | 0.85" in output  # agentic faithfulness
+        assert "0.80" in output  # mean_revisions
+        assert "0.10" in output  # caveat_rate
+        assert "$10.00" in output  # vanilla cost
+        assert "$20.00" in output  # agentic cost
+
+    def test_renders_delta_table(self, tmp_path: Path) -> None:
+        """Test per-type delta table with deltas."""
+        summary = {
+            "run_id": "test-run",
+            "dataset_version": "v2",
+            "n_examples": 10,
+            "configs": [
+                {
+                    "provider": "anthropic",
+                    "model": "claude-sonnet-5",
+                    "mode": "hybrid",
+                    "rerank": "none",
+                    "pipeline": "vanilla",
+                    "synthesis_prompt": "synthesis.v2",
+                    "scores": {},
+                    "latency_s": {},
+                    "by_type": {
+                        "lookup": {
+                            "n": 5,
+                            "n_judged": 5,
+                            "scores": {
+                                "faithfulness": 0.8,
+                                "relevance": 0.85,
+                                "citation_accuracy": 0.75,
+                            },
+                            "refusal_rate": 0.0,
+                        },
+                    },
+                    "agent": None,
+                },
+                {
+                    "provider": "anthropic",
+                    "model": "claude-sonnet-5",
+                    "mode": "hybrid",
+                    "rerank": "none",
+                    "pipeline": "agentic",
+                    "synthesis_prompt": "agent-synthesis.v1",
+                    "scores": {},
+                    "latency_s": {},
+                    "by_type": {
+                        "lookup": {
+                            "n": 5,
+                            "n_judged": 5,
+                            "scores": {
+                                "faithfulness": 0.9,
+                                "relevance": 0.88,
+                                "citation_accuracy": 0.78,
+                            },
+                            "refusal_rate": 0.0,
+                        },
+                    },
+                    "agent": {"multi_hop_rate": 0.0, "mean_revisions": 0.0, "caveat_rate": 0.0},
+                },
+            ],
+        }
+        json_file = tmp_path / "summary.json"
+        with json_file.open("w") as f:
+            json.dump(summary, f)
+
+        output = render_agentic_comparison(json_file)
+
+        # Check delta table
+        assert "lookup" in output
+        assert "anthropic" in output
+        # Deltas: 0.9-0.8=+0.10, 0.88-0.85=+0.03, 0.78-0.75=+0.03
+        assert "+0.10" in output  # faithfulness delta
+        assert "+0.03" in output  # relevance and citation accuracy deltas
+
+    def test_raises_on_no_agentic_config(self, tmp_path: Path) -> None:
+        """Test ValueError when no agentic config present."""
+        summary = {
+            "run_id": "test-run",
+            "dataset_version": "v2",
+            "n_examples": 10,
+            "configs": [
+                {
+                    "provider": "anthropic",
+                    "model": "claude-sonnet-5",
+                    "mode": "hybrid",
+                    "rerank": "none",
+                    "pipeline": "vanilla",
+                    "synthesis_prompt": "synthesis.v2",
+                    "scores": {},
+                    "latency_s": {},
+                    "by_type": {},
+                    "agent": None,
+                },
+            ],
+        }
+        json_file = tmp_path / "summary.json"
+        with json_file.open("w") as f:
+            json.dump(summary, f)
+
+        with pytest.raises(ValueError, match="no agentic config"):
+            render_agentic_comparison(json_file)
+
+    def test_handles_none_values(self, tmp_path: Path) -> None:
+        """Test that None values render as —."""
+        summary = {
+            "run_id": "test-run",
+            "dataset_version": "v2",
+            "n_examples": 10,
+            "configs": [
+                {
+                    "provider": "anthropic",
+                    "model": "claude-sonnet-5",
+                    "mode": "hybrid",
+                    "rerank": "none",
+                    "pipeline": "vanilla",
+                    "synthesis_prompt": "synthesis.v2",
+                    "scores": {"faithfulness": None, "relevance": None, "citation_accuracy": None},
+                    "false_refusal_rate": None,
+                    "refusal_correct_rate": None,
+                    "latency_s": {"p50": None},
+                    "gen_cost_usd": None,
+                    "by_type": {},
+                    "agent": None,
+                },
+                {
+                    "provider": "anthropic",
+                    "model": "claude-sonnet-5",
+                    "mode": "hybrid",
+                    "rerank": "none",
+                    "pipeline": "agentic",
+                    "synthesis_prompt": "agent-synthesis.v1",
+                    "scores": {"faithfulness": None, "relevance": None, "citation_accuracy": None},
+                    "false_refusal_rate": None,
+                    "refusal_correct_rate": None,
+                    "latency_s": {"p50": None},
+                    "gen_cost_usd": None,
+                    "by_type": {},
+                    "agent": None,
+                },
+            ],
+        }
+        json_file = tmp_path / "summary.json"
+        with json_file.open("w") as f:
+            json.dump(summary, f)
+
+        output = render_agentic_comparison(json_file)
+
+        # Check that — appears for None values
+        assert "—" in output
