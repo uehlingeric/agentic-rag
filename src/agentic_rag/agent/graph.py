@@ -220,7 +220,7 @@ class AgenticPipeline:
                 payload={
                     "revision": revision_count,
                     "refusal": draft.refusal,
-                    "trailing_sentinel": draft.trailing_sentinel,
+                    "stray_sentinel": draft.stray_sentinel,
                     "prompt_id": draft.prompt_id,
                     "draft": draft.text,
                 },

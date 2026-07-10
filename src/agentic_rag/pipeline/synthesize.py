@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
-from agentic_rag.pipeline.base import NO_ANSWER_SENTINEL
+from agentic_rag.pipeline.base import NO_ANSWER_SENTINEL, scrub_sentinel
 from agentic_rag.pipeline.context import BuiltContext
 from agentic_rag.prompts import load_prompt
 from agentic_rag.providers.base import LLMProvider, Message, Role, StreamEvent, Usage
@@ -17,11 +17,15 @@ class SynthesisResult:
 
     ``text`` has the sentinel stripped and leading/trailing whitespace trimmed.
     ``refusal`` is True when the model indicated the corpus cannot answer.
+    ``stray_sentinel`` is True when a non-leading sentinel occurrence was removed
+    mid-answer or trailing (the week-5 cross-provider failure mode); the text is
+    kept and no refusal is marked.
     ``usage`` and ``model`` come from the LLM completion.
     """
 
     text: str
     refusal: bool
+    stray_sentinel: bool
     usage: Usage
     model: str
 
@@ -62,13 +66,12 @@ async def synthesize(
         temperature=0.0,
     )
 
-    text = completion.text.lstrip()
-    refusal = text.startswith(NO_ANSWER_SENTINEL)
-    text = text[len(NO_ANSWER_SENTINEL) :].strip() if refusal else text.strip()
+    scrub = scrub_sentinel(completion.text)
 
     return SynthesisResult(
-        text=text,
-        refusal=refusal,
+        text=scrub.text,
+        refusal=scrub.refusal,
+        stray_sentinel=scrub.stray_sentinel,
         usage=completion.usage,
         model=completion.model,
     )
