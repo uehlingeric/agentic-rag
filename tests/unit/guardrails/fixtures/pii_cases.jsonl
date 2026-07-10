@@ -1,0 +1,35 @@
+{"id": "pii-001", "text": "SSN: 123-45-6789", "expect": [{"entity": "ssn", "count": 1}], "note": "SSN with dash separators"}
+{"id": "pii-002", "text": "SSN: 123.45.6789", "expect": [{"entity": "ssn", "count": 1}], "note": "SSN with dot separators"}
+{"id": "pii-003", "text": "SSN: 123 45 6789", "expect": [{"entity": "ssn", "count": 1}], "note": "SSN with space separators"}
+{"id": "pii-004", "text": "EIN: 12-3456789", "expect": [{"entity": "ein", "count": 1}], "note": "EIN standard format"}
+{"id": "pii-005", "text": "Call (703) 555-0100 for support.", "expect": [{"entity": "phone", "count": 1}], "note": "Phone with parentheses and dashes"}
+{"id": "pii-006", "text": "Call 703-555-0100", "expect": [{"entity": "phone", "count": 1}], "note": "Phone with dashes"}
+{"id": "pii-007", "text": "Call 703.555.0100", "expect": [{"entity": "phone", "count": 1}], "note": "Phone with dots"}
+{"id": "pii-008", "text": "Reach +1 703 555 0100 internationally", "expect": [{"entity": "phone", "count": 1}], "note": "Phone with +1 prefix and spaces"}
+{"id": "pii-009", "text": "Email: alice@example.com", "expect": [{"entity": "email", "count": 1}], "note": "Standard email"}
+{"id": "pii-010", "text": "Email: alice [at] example [dot] com", "expect": [{"entity": "email", "count": 1}], "note": "Obfuscated email with [at] and [dot]"}
+{"id": "pii-011", "text": "Credit card: 4111111111111111", "expect": [{"entity": "credit_card", "count": 1}], "note": "Valid Visa card (Luhn passes)"}
+{"id": "pii-012", "text": "Card: 4111-1111-1111-1111", "expect": [{"entity": "credit_card", "count": 1}], "note": "Credit card with dashes"}
+{"id": "pii-013", "text": "Card: 4111 1111 1111 1111", "expect": [{"entity": "credit_card", "count": 1}], "note": "Credit card with spaces"}
+{"id": "pii-014", "text": "Server at 192.168.1.1 online", "expect": [{"entity": "ip", "count": 1}], "note": "Valid IPv4"}
+{"id": "pii-015", "text": "Broadcast 0.0.0.0", "expect": [{"entity": "ip", "count": 1}], "note": "IPv4 0.0.0.0"}
+{"id": "pii-016", "text": "Broadcast 255.255.255.255", "expect": [{"entity": "ip", "count": 1}], "note": "IPv4 255.255.255.255"}
+{"id": "pii-017", "text": "Contact alice@example.com or call 703-555-0100", "expect": [{"entity": "email", "count": 1}, {"entity": "phone", "count": 1}], "note": "Multi-entity: email and phone"}
+{"id": "pii-018", "text": "SP 800-53 defines controls", "expect": [], "note": "Hard negative: NIST control number, not phone"}
+{"id": "pii-019", "text": "NIST 800-171 is a standard", "expect": [], "note": "Hard negative: NIST standard number"}
+{"id": "pii-020", "text": "SP 800-53r5 security controls", "expect": [], "note": "Hard negative: NIST SP 800-53r5 revision"}
+{"id": "pii-021", "text": "See section 3.13.11 for details", "expect": [], "note": "Hard negative: section number"}
+{"id": "pii-022", "text": "NIST SP 800-171A security", "expect": [], "note": "Hard negative: NIST SP with letter suffix"}
+{"id": "pii-023", "text": "Control AC-2(3) requires authentication", "expect": [], "note": "Hard negative: control ID with parentheses"}
+{"id": "pii-024", "text": "IR-4(5) incident handling controls", "expect": [], "note": "Hard negative: control ID IR-4(5)"}
+{"id": "pii-025", "text": "FIPS 199 publication", "expect": [], "note": "Hard negative: FIPS standard number"}
+{"id": "pii-026", "text": "Controls AC-17 through AC-20 apply", "expect": [], "note": "Hard negative: control range"}
+{"id": "pii-027", "text": "Card 4111-1111-1111-1112 invalid", "expect": [], "note": "Hard negative: Luhn-invalid credit card"}
+{"id": "pii-028", "text": "Invalid IP: 999.1.1.1", "expect": [], "note": "Hard negative: octet > 255"}
+{"id": "pii-029", "text": "Windows version 10.0.19041.1", "expect": [], "note": "Hard negative: version string (5-digit octet)"}
+{"id": "pii-030", "text": "See excerpt [1] cites [2]", "expect": [], "note": "Hard negative: citation numbers in brackets"}
+{"id": "pii-031", "text": "Document 123456789 classified", "expect": [], "note": "Hard negative: bare 9-digit document ID"}
+{"id": "pii-032", "text": "Multiple emails: bob@test.com, carol@test.org", "expect": [{"entity": "email", "count": 2}], "note": "Two emails in one text"}
+{"id": "pii-033", "text": "SSN 987-65-4321 and 111-22-3333", "expect": [{"entity": "ssn", "count": 2}], "note": "Two SSNs"}
+{"id": "pii-034", "text": "EIN 98-7654321 for business", "expect": [{"entity": "ein", "count": 1}], "note": "EIN with typical number"}
+{"id": "pii-035", "text": "Rev 3 SP 800-171 guidance", "expect": [], "note": "Hard negative: 'Rev 3 SP 800-171' should not match"}

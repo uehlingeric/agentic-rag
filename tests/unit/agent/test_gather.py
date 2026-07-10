@@ -207,11 +207,11 @@ async def test_dedupe_shared_chunk() -> None:
 async def test_proportional_budget_respects_per_query_limit() -> None:
     """A chunk over its sub-query's budget is excluded even with global room left.
 
-    With the whitespace counter every excerpt is exactly 18 tokens: 8 header
-    tokens ("[n] sp800-53r5 §AC-2 — AC-2 ACCOUNT MANAGEMENT (p.1)") plus 10
-    text tokens. max_context_tokens=90 gives each of the two sub-queries a
-    45-token budget: two excerpts (36) fit, a third (54) does not — so each
-    query contributes exactly 2 chunks and the merged total (72 tokens) stays
+    With the whitespace counter every excerpt is exactly 20 tokens: 9 tokens
+    for the <excerpt id=n source="..."> line, 10 text tokens, and 1 for the
+    closing tag. max_context_tokens=90 gives each of the two sub-queries a
+    45-token budget: two excerpts (40) fit, a third (60) does not — so each
+    query contributes exactly 2 chunks and the merged total (80 tokens) stays
     under the untouched global budget of 90.
     """
     chunk_1 = make_chunk("c-1", text="word " * 10)
@@ -250,7 +250,7 @@ async def test_proportional_budget_respects_per_query_limit() -> None:
     )
 
     assert [s.chunk.chunk_id for s in result.context.chunks] == ["c-1", "c-2", "c-4", "c-5"]
-    assert result.context.token_count == 72  # 4 excerpts x 18 tokens, under the global 90
+    assert result.context.token_count == 80  # 4 excerpts x 20 tokens, under the global 90
 
 
 @pytest.mark.asyncio
@@ -402,10 +402,10 @@ async def test_markers_are_global_one_to_n() -> None:
         count_tokens=count_tokens,
     )
 
-    # Verify the context text has markers [1], [2], [3]
-    assert "[1]" in result.context.text
-    assert "[2]" in result.context.text
-    assert "[3]" in result.context.text
+    # Verify the context text has excerpt ids 1, 2, 3
+    assert "<excerpt id=1 " in result.context.text
+    assert "<excerpt id=2 " in result.context.text
+    assert "<excerpt id=3 " in result.context.text
 
     # Verify chunks are in order
     assert result.context.chunks[0].chunk.chunk_id == "c-a"

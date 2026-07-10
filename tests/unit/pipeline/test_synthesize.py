@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from agentic_rag.pipeline.base import NO_ANSWER_SENTINEL
+from agentic_rag.pipeline.base import NO_ANSWER_SENTINEL, scrub_sentinel
 from agentic_rag.pipeline.context import BuiltContext
 from agentic_rag.pipeline.synthesize import stream_synthesis, synthesize
 from agentic_rag.providers.base import Completion, Message, StreamEvent, Usage
@@ -122,6 +122,7 @@ async def test_normal_completion() -> None:
 
     assert result.text == "The answer is here [1]."
     assert result.refusal is False
+    assert result.stray_sentinel is False
     assert result.usage.input_tokens == 100
     assert result.usage.output_tokens == 50
     assert result.model == "fake-model"
@@ -303,3 +304,157 @@ async def test_streaming_empty_delta_after_sentinel() -> None:
     result = "".join(collected_deltas)
     # After sentinel is stripped, nothing remains
     assert result == ""
+
+
+@pytest.mark.asyncio
+async def test_mid_answer_sentinel() -> None:
+    """Test mid-answer sentinel: partial claim, then sentinel, then caveat."""
+    chunk = make_chunk("c1", text="Test data.")
+    scored = ScoredChunk(chunk=chunk, score=0.9, rank=1)
+    context = BuiltContext(text="[1] test\n", chunks=[scored], token_count=10)
+
+    # Mid-answer: starts with normal text, has sentinel in middle
+    completion_text = "Partial claim [1].\n\n[NO_ANSWER] The excerpts do not state X."
+    llm = FakeLLM(completion_text=completion_text)
+
+    result = await synthesize(llm, "What is X?", context)
+
+    # Should NOT be a refusal (sentinel is not leading)
+    assert result.refusal is False
+    # Should mark stray sentinel
+    assert result.stray_sentinel is True
+    # Text should keep both claim and caveat, no sentinel
+    assert "Partial claim [1]." in result.text
+    assert "The excerpts do not state X." in result.text
+    assert NO_ANSWER_SENTINEL not in result.text
+    # Paragraph break preserved since newline follows period
+    assert ".\n\nThe" in result.text
+
+
+@pytest.mark.asyncio
+async def test_trailing_sentinel_directly_at_end() -> None:
+    """Test sentinel directly at end of answer."""
+    chunk = make_chunk("c1", text="Test data.")
+    scored = ScoredChunk(chunk=chunk, score=0.9, rank=1)
+    context = BuiltContext(text="[1] test\n", chunks=[scored], token_count=10)
+
+    completion_text = f"The answer is here [1]. {NO_ANSWER_SENTINEL}"
+    llm = FakeLLM(completion_text=completion_text)
+
+    result = await synthesize(llm, "What is this?", context)
+
+    assert result.refusal is False
+    assert result.stray_sentinel is True
+    assert result.text == "The answer is here [1]."
+    assert NO_ANSWER_SENTINEL not in result.text
+
+
+@pytest.mark.asyncio
+async def test_inline_mid_sentence_sentinel() -> None:
+    """Test sentinel inline mid-sentence."""
+    chunk = make_chunk("c1", text="Test data.")
+    scored = ScoredChunk(chunk=chunk, score=0.9, rank=1)
+    context = BuiltContext(text="[1] test\n", chunks=[scored], token_count=10)
+
+    # Sentinel inserted in middle of a sentence
+    completion_text = "maintaining them [NO_ANSWER] The excerpts do not state Y."
+    llm = FakeLLM(completion_text=completion_text)
+
+    result = await synthesize(llm, "What?", context)
+
+    assert result.refusal is False
+    assert result.stray_sentinel is True
+    # Text should be joined with single space
+    assert result.text == "maintaining them The excerpts do not state Y."
+    assert NO_ANSWER_SENTINEL not in result.text
+
+
+@pytest.mark.asyncio
+async def test_leading_and_stray_sentinel() -> None:
+    """Test leading sentinel + stray occurrence later."""
+    chunk = make_chunk("c1", text="Test data.")
+    scored = ScoredChunk(chunk=chunk, score=0.9, rank=1)
+    context = BuiltContext(text="[1] test\n", chunks=[scored], token_count=10)
+
+    # Leading sentinel means refusal, but there's also a stray one
+    completion_text = f"{NO_ANSWER_SENTINEL} Some text [NO_ANSWER] more text."
+    llm = FakeLLM(completion_text=completion_text)
+
+    result = await synthesize(llm, "What?", context)
+
+    # Leading sentinel takes priority: this is a refusal
+    assert result.refusal is True
+    # But stray occurrence was also found and removed
+    assert result.stray_sentinel is True
+    # Text after leading sentinel has stray removed
+    assert result.text == "Some text more text."
+    assert NO_ANSWER_SENTINEL not in result.text
+
+
+@pytest.mark.asyncio
+async def test_streaming_mid_answer_sentinel() -> None:
+    """Test streaming with mid-answer sentinel in terminal completion."""
+    chunk = make_chunk("c1")
+    scored = ScoredChunk(chunk=chunk, score=0.9, rank=1)
+    context = BuiltContext(text="[1] test\n", chunks=[scored], token_count=10)
+
+    # Streamed deltas are clean, but terminal completion has stray sentinel
+    deltas = ["The answer is ", "here [1]."]
+    completion_text = "The answer is here [1]. [NO_ANSWER] But the context is limited."
+    llm = FakeLLM(completion_text=completion_text, stream_deltas=deltas)
+
+    collected_deltas = []
+    terminal_completion = None
+    async for event in stream_synthesis(llm, "Q?", context):
+        if event.delta:
+            collected_deltas.append(event.delta)
+        if event.completion:
+            terminal_completion = event.completion
+
+    # Streamed deltas should NOT include sentinel (streaming only buffers leading)
+    streamed = "".join(collected_deltas)
+    assert NO_ANSWER_SENTINEL not in streamed
+
+    # Terminal completion still has the raw text (not post-processed by stream_synthesis)
+    assert NO_ANSWER_SENTINEL in terminal_completion.text
+    assert "The answer is here" in terminal_completion.text
+
+
+def test_scrub_sentinel_empty_string() -> None:
+    """Test scrub_sentinel with empty string."""
+    result = scrub_sentinel("")
+    assert result.text == ""
+    assert result.refusal is False
+    assert result.stray_sentinel is False
+
+
+def test_scrub_sentinel_only_sentinel() -> None:
+    """Test scrub_sentinel with only sentinel."""
+    result = scrub_sentinel(f"{NO_ANSWER_SENTINEL}")
+    assert result.text == ""
+    assert result.refusal is True
+    assert result.stray_sentinel is False
+
+
+def test_scrub_sentinel_leading_only() -> None:
+    """Test scrub_sentinel with leading sentinel and text."""
+    result = scrub_sentinel(f"{NO_ANSWER_SENTINEL} The answer.")
+    assert result.text == "The answer."
+    assert result.refusal is True
+    assert result.stray_sentinel is False
+
+
+def test_scrub_sentinel_stray_only() -> None:
+    """Test scrub_sentinel with stray (non-leading) sentinel."""
+    result = scrub_sentinel(f"The answer. {NO_ANSWER_SENTINEL}")
+    assert result.text == "The answer."
+    assert result.refusal is False
+    assert result.stray_sentinel is True
+
+
+def test_scrub_sentinel_with_whitespace() -> None:
+    """Test scrub_sentinel with leading/trailing whitespace."""
+    result = scrub_sentinel(f"  \n{NO_ANSWER_SENTINEL} Answer text.  ")
+    assert result.text == "Answer text."
+    assert result.refusal is True
+    assert result.stray_sentinel is False
