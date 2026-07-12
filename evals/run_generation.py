@@ -62,6 +62,11 @@ def main(
     ),
     concurrency: int = typer.Option(4, "--concurrency", help="Concurrent synthesis/judge calls"),
     judge: bool = typer.Option(True, "--judge/--no-judge", help="Enable LLM-as-judge scoring"),
+    guardrails: bool = typer.Option(
+        False,
+        "--guardrails/--no-guardrails",
+        help="Wrap pipelines in guardrails (the production path)",
+    ),
     estimate_only: bool = typer.Option(
         False, "--estimate-only", help="Print cost estimate and exit"
     ),
@@ -164,6 +169,7 @@ def main(
                 dataset_version=Path(dataset).stem,
                 concurrency=concurrency,
                 do_judge=judge,
+                guardrails=guardrails,
             )
 
     asyncio.run(_run())

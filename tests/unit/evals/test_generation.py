@@ -339,6 +339,83 @@ async def test_run_config_refusal_no_judge() -> None:
         assert result["judge"] is None
 
 
+async def test_run_config_guardrails_production_path(
+    golden_examples: list[GoldenExample],
+) -> None:
+    """guardrails=True wraps the pipeline in GuardedPipeline.
+
+    Rows carry guardrails=True plus guardrails_in/guardrails_out stage
+    timings; a clean answer passes through unmodified. Without the flag,
+    rows carry guardrails=False and no guardrail stages.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        chunk = ChunkRecord(
+            chunk_id="c1",
+            doc_id="doc1",
+            section_id="sec1",
+            section_ids=["sec1"],
+            section_path="doc1/sec1",
+            heading="Section 1",
+            page_start=1,
+            page_end=1,
+            token_count=100,
+            text="Text 1",
+        )
+        answer = Answer(
+            text="Foo is a bar per the spec.",
+            citations=[CitedChunk(marker=1, chunk=chunk)],
+            context=[ScoredChunk(chunk=chunk, score=0.9, rank=1)],
+            usage=Usage(input_tokens=100, output_tokens=50, cost_usd=0.01),
+            timings=[StageTiming(stage="synthesis", seconds=0.5)],
+            refusal=False,
+            invalid_citations=[],
+        )
+        settings = Settings(data_dir=Path(tmpdir) / "data")
+        pipeline = StubPipeline(answer)
+        # GuardedPipeline reads inner.settings.rerank.mode for audit records
+        pipeline.settings = settings  # type: ignore[attr-defined]
+
+        cfg = RunConfig(provider="ollama", mode="hybrid", rerank="none")
+
+        guarded_path = Path(tmpdir) / "guarded.jsonl"
+        await run_config(
+            cfg,
+            golden_examples[:1],
+            settings,
+            guarded_path,
+            dataset_version="v2",
+            concurrency=1,
+            do_judge=False,
+            guardrails=True,
+            _pipeline_factory=lambda s: pipeline,
+        )
+
+        row = json.loads(guarded_path.read_text().strip())
+        assert row["guardrails"] is True
+        assert row["answer_text"] == "Foo is a bar per the spec."
+        assert row["refusal"] is False
+        assert "guardrails_in" in row["latency_s"]
+        assert "guardrails_out" in row["latency_s"]
+        # Inner pipeline received the (unredacted) question
+        assert pipeline.ask_calls[0][0] == "What is foo?"
+
+        plain_path = Path(tmpdir) / "plain.jsonl"
+        await run_config(
+            cfg,
+            golden_examples[:1],
+            settings,
+            plain_path,
+            dataset_version="v2",
+            concurrency=1,
+            do_judge=False,
+            _pipeline_factory=lambda s: pipeline,
+        )
+
+        plain_row = json.loads(plain_path.read_text().strip())
+        assert plain_row["guardrails"] is False
+        assert "guardrails_in" not in plain_row["latency_s"]
+
+
 async def test_run_config_judge_parse_error() -> None:
     """Test that judge parse error is caught and row written with judge=None."""
     with tempfile.TemporaryDirectory() as tmpdir:
