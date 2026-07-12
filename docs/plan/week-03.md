@@ -1,6 +1,5 @@
 # Week 3 — Citation-Grounded Generation + Reranking
 
-**Dates:** Mon Jul 20 – Sun Jul 26, 2026
 **Objective:** End-to-end vanilla RAG: query → hybrid retrieval → rerank → synthesized answer with inline citations that resolve to real chunks. By Sunday, `agentic-rag ask "..."` streams a cited answer on any provider, and reranking shows a measured retrieval improvement.
 
 ## Exit Criteria

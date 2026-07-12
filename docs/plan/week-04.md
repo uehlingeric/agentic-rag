@@ -1,6 +1,5 @@
 # Week 4 — Eval Harness + First Full Benchmark
 
-**Dates:** Mon Jul 27 – Sun Aug 2, 2026
 **Objective:** The differentiator week. A generation eval harness with LLM-as-judge scoring — calibrated against human labels — and the first full benchmark matrix (provider × retrieval config) committed to the README-bound benchmarks doc. By Sunday, `make eval` runs the entire suite and emits a markdown report.
 
 ## Exit Criteria

@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
+## [1.0.0] — 2026-07-12
+
+### Changed
+
+- Module and CLI interfaces are now covered by stable SemVer
+
+### Removed
+
+- `CONTRIBUTING.md` and issue templates — the project is a reference system showcase, not a contribution-seeking package
+- Explicit calendar dates from the weekly plan docs; the plan reads as sequence and scope
+
 ## [0.1.0] — 2026-07-12
 
 First public release: the full 8-week build (plans in `docs/plan/`, decisions in

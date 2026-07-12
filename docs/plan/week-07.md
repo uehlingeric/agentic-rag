@@ -1,6 +1,5 @@
 # Week 7 — Observability, API Service, Docker
 
-**Dates:** Mon Aug 17 – Sun Aug 23, 2026
 **Objective:** Production-shape packaging: OpenTelemetry tracing through every pipeline stage, per-request token/cost/latency metrics, a hardened FastAPI service, and a Docker Compose stack that runs the whole system (Ollama included) with no API keys. By Sunday, `docker compose up` serves cited answers locally and traces are visible in Jaeger.
 
 ## Exit Criteria

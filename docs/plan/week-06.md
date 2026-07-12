@@ -1,6 +1,5 @@
 # Week 6 — Guardrails, Refusal Policy, Audit Logging
 
-**Dates:** Mon Aug 10 – Sun Aug 16, 2026
 **Objective:** The governance layer that mirrors production federal deployments: input/output PII detection, prompt-injection screening, a configurable refusal policy, and structured audit logging. By Sunday the pipeline runs with guardrails on by default, a red-team test suite passes, and every request leaves an audit trail.
 
 ## Exit Criteria

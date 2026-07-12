@@ -1,6 +1,5 @@
 # Week 8 — Launch: Final Benchmarks, Docs, v0.1.0 Public
 
-**Dates:** Mon Aug 24 – Sun Aug 30, 2026
 **Objective:** Ship it. Final full benchmark run, README rewritten for a 2-minute reviewer, demo assets, release hygiene, repo flipped public, pinned, and cross-linked from the profile. By Sunday night the repo is public with green CI and published numbers.
 
 ## Exit Criteria

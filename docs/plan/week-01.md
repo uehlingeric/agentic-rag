@@ -1,6 +1,5 @@
 # Week 1 — Foundations: Scaffold, Provider Adapters, Ingestion
 
-**Dates:** Mon Jul 6 – Sun Jul 12, 2026
 **Objective:** A running skeleton: repo scaffold with CI, a provider adapter layer that swaps Claude/GPT/Gemini/Ollama behind one interface, and an ingestion pipeline that downloads and chunks the NIST corpus. By Sunday, `make ingest` produces a chunked corpus on disk and `make chat` gets a (non-RAG) completion from any configured provider.
 
 ## Exit Criteria

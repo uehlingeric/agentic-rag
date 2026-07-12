@@ -1,6 +1,5 @@
 # Week 5 — Agent Loop: Planner → Retriever → Synthesizer → Critic
 
-**Dates:** Mon Aug 3 – Sun Aug 9, 2026
 **Objective:** The agentic layer on LangGraph: query decomposition, multi-step retrieval, synthesis, and a critic that verifies citations and triggers bounded revision. By Sunday the benchmark answers the headline question — **where does agentic RAG beat vanilla RAG, by how much, and at what cost** — with eval numbers on both pipelines.
 
 ## Exit Criteria

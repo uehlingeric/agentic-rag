@@ -1,6 +1,5 @@
 # Week 2 — Hybrid Retrieval Core + Golden Dataset v1
 
-**Dates:** Mon Jul 13 – Sun Jul 19, 2026
 **Objective:** Working hybrid retrieval over the chunked corpus — BM25, dense vectors, and reciprocal rank fusion — plus the first golden dataset and a retrieval-only eval script. By Sunday there is a **numbers table**: recall@k / MRR / nDCG for BM25 vs dense vs hybrid, committed to `docs/benchmarks.md`.
 
 ## Exit Criteria
