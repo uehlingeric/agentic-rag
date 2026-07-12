@@ -27,9 +27,9 @@ dependencies = [
     "uvicorn>=0.30",
     "slowapi>=0.1.9",
     "anthropic[bedrock]>=0.40",
-    "openai>=1.50",
-    "google-genai>=1.0",
-    "langgraph>=1.0",
+    "openai>=2.45.0",
+    "google-genai>=2.11.0",
+    "langgraph>=1.2.9",
     "tenacity>=9.0",
     "python-dotenv>=1.0",
     "pymupdf>=1.24",
@@ -44,8 +44,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "ruff>=0.8",
-    "mypy>=1.13",
+    "ruff>=0.15.21",
+    "mypy>=2.2.0",
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "pytest-cov>=6.0",
