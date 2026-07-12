@@ -1,0 +1,14 @@
+name: Question
+description: How something works, why a design decision was made, how to interpret the benchmarks
+labels: [question]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+      description: >
+        Check docs/ first — the benchmark methodology (docs/benchmarks.md), guardrails
+        (docs/guardrails.md), limitations (docs/limitations.md), and the ADRs in docs/adr/
+        answer the most common ones.
+    validations:
+      required: true

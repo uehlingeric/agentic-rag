@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agentic-rag"
-version = "0.1.0.dev0"
+version = "0.1.0"
 description = "Provider-agnostic agentic RAG reference system with hybrid retrieval, guardrails, and published evals"
 readme = "README.md"
 license = { file = "LICENSE" }

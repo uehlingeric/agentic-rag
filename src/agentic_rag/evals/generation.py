@@ -92,6 +92,7 @@ async def run_config(
     dataset_version: str,
     concurrency: int = 4,
     do_judge: bool = True,
+    guardrails: bool = False,
     _pipeline_factory: Callable[[Settings], Any] | None = None,  # For testing
 ) -> None:
     """Run generation evaluation for one config, writing results to out_path.
@@ -107,6 +108,8 @@ async def run_config(
         dataset_version: Version tag recorded on every row (the dataset file stem).
         concurrency: Max concurrent synthesis/judge calls.
         do_judge: If False, write judge=None for all rows.
+        guardrails: If True, wrap the pipeline in GuardedPipeline (production
+            path: input/output scans, audit, refusal policy) before asking.
         _pipeline_factory: Callable(settings) -> RAGPipeline (for testing).
     """
     # Resume: load existing example_ids and skip them
@@ -120,6 +123,9 @@ async def run_config(
 
     # Build per-config settings
     cfg_settings = config_settings(settings, cfg)
+
+    # Get provider model
+    provider_model = _get_provider_model(cfg.provider, cfg_settings)
 
     # Build metrics store once (may be None if disabled)
     metrics = metrics_store_for(cfg_settings)
@@ -158,6 +164,17 @@ async def run_config(
 
             pipeline = RAGPipeline(retriever, reranker, llm, cfg_settings)
 
+    if guardrails:
+        from agentic_rag.guardrails.guarded import GuardedPipeline
+
+        pipeline = GuardedPipeline(
+            pipeline,
+            cfg_settings,
+            provider=cfg.provider,
+            model=provider_model,
+            source="eval",
+        )
+
     # Build judge LLM if needed
     judge_llm = None
     if do_judge:
@@ -172,9 +189,6 @@ async def run_config(
     else:
         synthesis_prompt = load_prompt("synthesis", version=None)
     synthesis_prompt_id = synthesis_prompt.id
-
-    # Get provider model
-    provider_model = _get_provider_model(cfg.provider, cfg_settings)
 
     # Write results with async lock
     write_lock = asyncio.Lock()
@@ -192,8 +206,26 @@ async def run_config(
                 # Run synthesis
                 result = await pipeline.ask(example.question, mode=retrieval_mode)
 
+                # Unwrap GuardedResult: agent (AgentAnswer) when the inner
+                # pipeline is agentic and ran; answer otherwise (vanilla, or
+                # input blocked before the pipeline ran).
+                if guardrails:
+                    from agentic_rag.guardrails.guarded import GuardedResult
+
+                    if not isinstance(result, GuardedResult):
+                        raise TypeError(
+                            f"Expected GuardedResult with guardrails on, got {type(result)}"
+                        )
+                    result = result.agent if result.agent is not None else result.answer
+
                 # Extract answer and agent metadata based on pipeline
-                if cfg.pipeline == "agentic":
+                from agentic_rag.pipeline.base import Answer
+
+                if cfg.pipeline == "agentic" and guardrails and isinstance(result, Answer):
+                    # Guardrails blocked the input; no agent state exists.
+                    answer = result
+                    agent_meta = None
+                elif cfg.pipeline == "agentic":
                     from agentic_rag.agent.state import AgentAnswer
                     from agentic_rag.evals.records import AgentMeta
 
@@ -209,8 +241,6 @@ async def run_config(
                         caveat=result.caveat,
                     )
                 else:
-                    from agentic_rag.pipeline.base import Answer
-
                     if not isinstance(result, Answer):
                         raise TypeError(f"Expected Answer for vanilla pipeline, got {type(result)}")
                     answer = result
@@ -269,6 +299,7 @@ async def run_config(
                     latency_s=latency_s,
                     judge=judge_scores,
                     agent=agent_meta,
+                    guardrails=guardrails,
                 )
 
                 # Write row
