@@ -4,6 +4,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Keep uv.lock fresh without raising pyproject version floors
+    versioning-strategy: lockfile-only
     groups:
       minor-and-patch:
         update-types: [minor, patch]
@@ -15,3 +17,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # The runtime stays on CI-tested Python versions (see pyproject
+      # classifiers); bump deliberately, not via bot
+      - dependency-name: python
+        update-types: ["version-update:semver-major"]
