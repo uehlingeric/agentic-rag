@@ -44,6 +44,9 @@ GENERATION_SUMMARY = Path("evals/results/generation-20260709-200512Z/summary.jso
 # build(agentic_summary=...) / build_report.py --agentic-summary.
 AGENTIC_SUMMARY = Path("evals/results/generation-20260710-131027Z/summary.json")
 
+# week-8 final matrix (guardrails on)
+FINAL_SUMMARY = Path("evals/results/generation-20260712-011239Z/summary.json")
+
 
 def _round_4dp(value: float) -> str:
     """Format a float to 4 decimal places."""
@@ -245,7 +248,13 @@ def render_rerank_table(results_path: Path, cross_encoder_path: Path | None = No
     return "\n".join(lines)
 
 
-def render_agentic_comparison(summary_path: Path) -> str:
+def render_agentic_comparison(
+    summary_path: Path,
+    *,
+    mode: str | None = None,
+    rerank: str | None = None,
+    heading: str | None = None,
+) -> str:
     """Render agentic vs. vanilla comparison from summary JSON.
 
     Input: a summary.json containing BOTH pipelines for >= 1 provider at the
@@ -258,12 +267,33 @@ def render_agentic_comparison(summary_path: Path) -> str:
        columns Provider | Type | n | F van | F ag | DF | R van | R ag | DR |
        C van | C ag | DC. Deltas = agentic - vanilla, signed with 2dp.
 
-    Raises ValueError if no agentic config is present.
+    Args:
+        summary_path: Path to the summary JSON.
+        mode: Optional retrieval mode to filter by (e.g., "hybrid"). If provided,
+              only configs matching this mode are used.
+        rerank: Optional rerank value to filter by (e.g., "llm"). If provided,
+                only configs matching this rerank are used.
+        heading: Optional heading to use; defaults to
+                 "## Agentic vs. Vanilla Comparison".
+
+    Raises ValueError if no agentic config is present, or if after filtering,
+    any (provider, pipeline) pair matches more than one config.
     """
     with summary_path.open() as f:
         data = json.load(f)
 
     configs = data["configs"]
+
+    # Filter configs by mode and/or rerank if provided
+    if mode is not None or rerank is not None:
+        filtered_configs = []
+        for cfg in configs:
+            if mode is not None and cfg.get("mode") != mode:
+                continue
+            if rerank is not None and cfg.get("rerank", "none") != rerank:
+                continue
+            filtered_configs.append(cfg)
+        configs = filtered_configs
 
     # Filter for agentic configs
     agentic_configs = [c for c in configs if c.get("pipeline") == "agentic"]
@@ -272,9 +302,39 @@ def render_agentic_comparison(summary_path: Path) -> str:
     if not agentic_configs:
         raise ValueError("Summary contains no agentic config; cannot render comparison")
 
+    # Safety check: ensure no (provider, pipeline) pair is ambiguous
+    # (matches multiple configs)
+    seen_pairs: dict[tuple[str, str], int] = {}
+    for cfg in configs:
+        provider = cfg["provider"]
+        pipeline = cfg.get("pipeline", "vanilla")
+        pair = (provider, pipeline)
+        seen_pairs[pair] = seen_pairs.get(pair, 0) + 1
+
+    for pair, count in seen_pairs.items():
+        if count > 1:
+            provider, pipeline = pair
+            raise ValueError(
+                f"ambiguous configs for provider={provider} pipeline={pipeline}: "
+                "pass mode/rerank filters"
+            )
+
     lines = []
-    lines.append("## Agentic vs. Vanilla Comparison")
+    if heading is None:
+        heading = "## Agentic vs. Vanilla Comparison"
+    lines.append(heading)
     lines.append("")
+
+    # Add filter description if filters were applied
+    if mode is not None or rerank is not None:
+        filter_parts = []
+        if mode is not None:
+            filter_parts.append(f"mode {mode}")
+        if rerank is not None:
+            filter_parts.append(f"rerank {rerank}")
+        filter_str = " + ".join(filter_parts)
+        lines.append(f"Retrieval config: {filter_str}.")
+        lines.append("")
 
     # Build headline table: one row per (provider, pipeline)
     headline_rows = []
@@ -446,11 +506,13 @@ def render_agentic_comparison(summary_path: Path) -> str:
     return "\n".join(lines)
 
 
-def render_generation_section(summary_path: Path) -> str:
+def render_generation_section(summary_path: Path, *, heading: str | None = None) -> str:
     """Render generation quality and operations section from summary JSON.
 
     Args:
         summary_path: Path to generation summary JSON.
+        heading: Optional heading to use; defaults to
+                 "## Generation — provider x retrieval matrix".
 
     Returns:
         Markdown string with heading, judge attribution, quality table,
@@ -467,7 +529,9 @@ def render_generation_section(summary_path: Path) -> str:
     lines = []
 
     # Heading and config line
-    lines.append("## Generation — provider × retrieval matrix")  # noqa: RUF001
+    if heading is None:
+        heading = "## Generation — provider × retrieval matrix"  # noqa: RUF001
+    lines.append(heading)
     lines.append("")
 
     # Synthesis prompt from first config (with validation)
@@ -507,12 +571,19 @@ def render_generation_section(summary_path: Path) -> str:
             )
         lines.append("")
 
+    # Detect distinct pipelines in configs
+    pipelines = set()
+    for cfg in configs:
+        pipelines.add(cfg.get("pipeline", "vanilla"))
+    has_multiple_pipelines = len(pipelines) > 1
+
     # Quality table headers (fields wrapped to manage line length)
     quality_rows = []
     for cfg in configs:
         provider = cfg["provider"]
         mode = cfg["mode"]
         rerank = cfg.get("rerank", "none")
+        pipeline = cfg.get("pipeline", "vanilla")
         scores = cfg.get("scores", {})
         faithfulness = scores.get("faithfulness")
         relevance = scores.get("relevance")
@@ -527,6 +598,7 @@ def render_generation_section(summary_path: Path) -> str:
                 "provider": provider,
                 "mode": mode,
                 "rerank": rerank,
+                "pipeline": pipeline,
                 "faithfulness": faithfulness,
                 "relevance": relevance,
                 "citation_accuracy": citation_accuracy,
@@ -570,15 +642,26 @@ def render_generation_section(summary_path: Path) -> str:
                     bold_cells.add((i, col))
 
     # Build quality table
-    header = (
-        "| Provider | Mode | Rerank | Faithfulness | Relevance | "
-        "Citation acc. | Refusal correct | False refusal | Judged |"
-    )
+    if has_multiple_pipelines:
+        header = (
+            "| Provider | Mode | Rerank | Pipeline | Faithfulness | Relevance | "
+            "Citation acc. | Refusal correct | False refusal | Judged |"
+        )
+        header_sep = (
+            "|----------|------|--------|----------|--------------|-----------|"
+            "----------------|-----------------|---------------|--------|"
+        )
+    else:
+        header = (
+            "| Provider | Mode | Rerank | Faithfulness | Relevance | "
+            "Citation acc. | Refusal correct | False refusal | Judged |"
+        )
+        header_sep = (
+            "|----------|------|--------|--------------|-----------|"
+            "----------------|-----------------|---------------|--------|"
+        )
     lines.append(header)
-    lines.append(
-        "|----------|------|--------|--------------|-----------|"
-        "----------------|-----------------|---------------|--------|"
-    )
+    lines.append(header_sep)
 
     quality_cols = [
         "faithfulness",
@@ -589,6 +672,8 @@ def render_generation_section(summary_path: Path) -> str:
     ]
     for i, row in enumerate(quality_rows):
         cells = [row["provider"], row["mode"], row["rerank"]]
+        if has_multiple_pipelines:
+            cells.append(row["pipeline"])
 
         for col in quality_cols:
             val = format_score(row[col])
@@ -602,15 +687,26 @@ def render_generation_section(summary_path: Path) -> str:
     lines.append("")
 
     # Ops table
-    ops_header = (
-        "| Provider | Mode | Rerank | Latency mean (s) | p50 | p95 | "
-        "Gen tokens in/out | Gen cost | Judge cost |"
-    )
+    if has_multiple_pipelines:
+        ops_header = (
+            "| Provider | Mode | Rerank | Pipeline | Latency mean (s) | p50 | p95 | "
+            "Gen tokens in/out | Gen cost | Judge cost |"
+        )
+        ops_header_sep = (
+            "|----------|------|--------|----------|------------------|-----|-----|"
+            "-------------------|----------|------------|"
+        )
+    else:
+        ops_header = (
+            "| Provider | Mode | Rerank | Latency mean (s) | p50 | p95 | "
+            "Gen tokens in/out | Gen cost | Judge cost |"
+        )
+        ops_header_sep = (
+            "|----------|------|--------|------------------|-----|-----|"
+            "-------------------|----------|------------|"
+        )
     lines.append(ops_header)
-    lines.append(
-        "|----------|------|--------|------------------|-----|-----|"
-        "-------------------|----------|------------|"
-    )
+    lines.append(ops_header_sep)
 
     def format_latency(val: float | None) -> str:
         """Format latency to 2 decimals or — if null."""
@@ -630,6 +726,7 @@ def render_generation_section(summary_path: Path) -> str:
         provider = cfg["provider"]
         mode = cfg["mode"]
         rerank = cfg.get("rerank", "none")
+        pipeline = cfg.get("pipeline", "vanilla")
         latency = cfg.get("latency_s", {})
         latency_mean = latency.get("mean") if latency else None
         latency_p50 = latency.get("p50") if latency else None
@@ -644,13 +741,19 @@ def render_generation_section(summary_path: Path) -> str:
             provider,
             mode,
             rerank,
-            format_latency(latency_mean),
-            format_latency(latency_p50),
-            format_latency(latency_p95),
-            format_tokens(gen_tokens_in, gen_tokens_out),
-            format_cost(gen_cost),
-            format_cost(judge_cost),
         ]
+        if has_multiple_pipelines:
+            cells.append(pipeline)
+        cells.extend(
+            [
+                format_latency(latency_mean),
+                format_latency(latency_p50),
+                format_latency(latency_p95),
+                format_tokens(gen_tokens_in, gen_tokens_out),
+                format_cost(gen_cost),
+                format_cost(judge_cost),
+            ]
+        )
         lines.append("| " + " | ".join(cells) + " |")
 
     lines.append("")
@@ -679,6 +782,7 @@ def build(
     *,
     generation_summary: Path | None = None,
     agentic_summary: Path | None = None,
+    final_summary: Path | None = None,
 ) -> str:
     """Build and write the benchmark report.
 
@@ -691,6 +795,8 @@ def build(
                             pinned committed run (GENERATION_SUMMARY).
         agentic_summary: Path to a vanilla-vs-agentic summary JSON; defaults to
                          the pinned committed run (AGENTIC_SUMMARY).
+        final_summary: Path to a week-8 final matrix summary JSON; defaults to
+                       the pinned committed run (FINAL_SUMMARY).
 
     Returns:
         The assembled markdown document as a string.
@@ -743,6 +849,22 @@ def build(
         ),
         Fragment(Path("docs/fragments/benchmarks/09-week5-analysis.md")),
         Fragment(Path("docs/fragments/benchmarks/10-week6-guardrails.md")),
+        Fragment(Path("docs/fragments/benchmarks/11-week8-config.md")),
+        Table(
+            kind="generation",
+            source_path=final_summary if final_summary is not None else FINAL_SUMMARY,
+            params={"heading": "### Full matrix — provider × retrieval × pipeline"},  # noqa: RUF001
+        ),
+        Table(
+            kind="agentic",
+            source_path=final_summary if final_summary is not None else FINAL_SUMMARY,
+            params={
+                "mode": "hybrid",
+                "rerank": "llm",
+                "heading": "### Agentic vs. vanilla — hybrid + llm rerank",
+            },
+        ),
+        Fragment(Path("docs/fragments/benchmarks/12-week8-analysis.md")),
         Fragment(Path("docs/fragments/benchmarks/06-reproduce.md")),
     ]
 
@@ -768,9 +890,15 @@ def build(
                     entry.source_path, cross_encoder_path=cross_encoder_path
                 )
             elif entry.kind == "generation":
-                table_text = render_generation_section(entry.source_path)
+                heading = entry.params.get("heading") if entry.params else None
+                table_text = render_generation_section(entry.source_path, heading=heading)
             elif entry.kind == "agentic":
-                table_text = render_agentic_comparison(entry.source_path)
+                mode = entry.params.get("mode") if entry.params else None
+                rerank = entry.params.get("rerank") if entry.params else None
+                heading = entry.params.get("heading") if entry.params else None
+                table_text = render_agentic_comparison(
+                    entry.source_path, mode=mode, rerank=rerank, heading=heading
+                )
             else:
                 raise ValueError(f"Unknown table kind: {entry.kind}")
 
