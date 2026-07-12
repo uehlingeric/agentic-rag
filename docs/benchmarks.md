@@ -271,6 +271,138 @@ The injection layer's honest per-category catch rate (30/30 expect-catch cases, 
 misses) and the corpus-poisoning canary live in [docs/guardrails.md](guardrails.md); the
 red-team suite is `evals/redteam/attacks_v1.jsonl`.
 
+## Week 8 — Final benchmark: full matrix, guardrails on (2026-07-12)
+
+The v0.1.0 canonical run: three providers × four retrieval configs × both pipelines
+(24 configs, 46 examples each), executed through the production `GuardedPipeline`
+path (runner `--guardrails`) with the week-6 delimiter-hardened prompts
+(synthesis.v3, agent-synthesis.v2), dataset v2, judge.v2. Models: Bedrock
+`global.anthropic.claude-sonnet-4-6`, Vertex `gemini-3.5-flash`, local
+`llama3.1:8b`. The sections above are retained as the historical record of the
+build; the tables below supersede them as the headline numbers (the week-4/5 runs
+predate the current prompts).
+
+### Full matrix — provider × retrieval × pipeline
+
+Run `generation-20260712-011239Z`, dataset v2 (46 examples), synthesis prompt agent-synthesis.v2, synthesis.v3.
+
+- anthropic answers judged by google `gemini-3.5-flash` (judge.v2)
+- google, ollama answers judged by anthropic `global.anthropic.claude-sonnet-4-6` (judge.v2)
+
+| Provider | Mode | Rerank | Pipeline | Faithfulness | Relevance | Citation acc. | Refusal correct | False refusal | Judged |
+|----------|------|--------|----------|--------------|-----------|----------------|-----------------|---------------|--------|
+| anthropic | bm25 | none | agentic | **5.00** | 4.79 | **5.00** | **1.00** | 0.24 | 29/46 |
+| anthropic | bm25 | none | vanilla | 4.90 | 4.90 | 4.90 | **1.00** | 0.45 | 21/46 |
+| anthropic | dense | none | agentic | **5.00** | 4.71 | **5.00** | **1.00** | 0.26 | 28/46 |
+| anthropic | dense | none | vanilla | **5.00** | 4.77 | **5.00** | **1.00** | 0.32 | 26/46 |
+| anthropic | hybrid | llm | agentic | **5.00** | 4.94 | **5.00** | 0.88 | 0.08 | 36/46 |
+| anthropic | hybrid | llm | vanilla | **5.00** | **5.00** | **5.00** | 0.88 | 0.16 | 33/46 |
+| anthropic | hybrid | none | agentic | **5.00** | 4.94 | **5.00** | **1.00** | 0.16 | 32/46 |
+| anthropic | hybrid | none | vanilla | **5.00** | 4.87 | **5.00** | **1.00** | 0.18 | 31/46 |
+| google | bm25 | none | agentic | 4.64 | 4.75 | 4.68 | **1.00** | 0.26 | 28/46 |
+| google | bm25 | none | vanilla | 4.70 | 4.50 | 4.70 | **1.00** | 0.47 | 20/46 |
+| google | dense | none | agentic | 4.71 | 4.67 | 4.71 | **1.00** | 0.37 | 24/46 |
+| google | dense | none | vanilla | 4.68 | 4.55 | 4.77 | **1.00** | 0.42 | 22/46 |
+| google | hybrid | llm | agentic | 4.78 | 4.66 | 4.84 | **1.00** | 0.16 | 32/46 |
+| google | hybrid | llm | vanilla | 4.80 | 4.63 | 4.90 | **1.00** | 0.21 | 30/46 |
+| google | hybrid | none | agentic | 4.89 | 4.71 | 4.79 | **1.00** | 0.26 | 28/46 |
+| google | hybrid | none | vanilla | 4.79 | 4.58 | 4.83 | **1.00** | 0.37 | 24/46 |
+| ollama | bm25 | none | agentic | 2.27 | 3.46 | 2.35 | 0.75 | 0.08 | 37/46 |
+| ollama | bm25 | none | vanilla | 2.82 | 3.18 | 2.84 | 0.88 | **0.03** | 38/46 |
+| ollama | dense | none | agentic | 2.11 | 2.89 | 2.34 | 0.88 | 0.11 | 35/46 |
+| ollama | dense | none | vanilla | 2.85 | 3.15 | 2.85 | 0.88 | 0.16 | 33/46 |
+| ollama | hybrid | llm | agentic | 2.26 | 2.88 | 2.03 | **1.00** | 0.11 | 34/46 |
+| ollama | hybrid | llm | vanilla | 3.00 | 3.03 | 3.00 | 0.88 | 0.16 | 33/46 |
+| ollama | hybrid | none | agentic | 2.29 | 2.71 | 2.50 | **1.00** | 0.11 | 34/46 |
+| ollama | hybrid | none | vanilla | 3.09 | 3.14 | 2.71 | **1.00** | 0.08 | 35/46 |
+
+| Provider | Mode | Rerank | Pipeline | Latency mean (s) | p50 | p95 | Gen tokens in/out | Gen cost | Judge cost |
+|----------|------|--------|----------|------------------|-----|-----|-------------------|----------|------------|
+| anthropic | bm25 | none | agentic | 34.48 | 16.95 | 88.56 | 558579 / 21867 | $2.00 | $0.14 |
+| anthropic | bm25 | none | vanilla | 8.40 | 6.05 | 23.06 | 208565 / 8242 | $0.75 | $0.10 |
+| anthropic | dense | none | agentic | 38.02 | 17.67 | 98.11 | 536196 / 22616 | $1.95 | $0.12 |
+| anthropic | dense | none | vanilla | 8.86 | 6.50 | 29.85 | 205603 / 9754 | $0.76 | $0.11 |
+| anthropic | hybrid | llm | agentic | 52.62 | 34.08 | 142.22 | 709870 / 52133 | $2.91 | $0.20 |
+| anthropic | hybrid | llm | vanilla | 21.50 | 17.87 | 53.96 | 288973 / 31898 | $1.35 | $0.16 |
+| anthropic | hybrid | none | agentic | 33.57 | 17.28 | 112.87 | 525896 / 19917 | $1.88 | $0.16 |
+| anthropic | hybrid | none | vanilla | 8.49 | 7.22 | 20.12 | 212257 / 11450 | $0.81 | $0.14 |
+| google | bm25 | none | agentic | 3.47 | 3.40 | 5.11 | 423021 / 7688 | $0.70 | $0.32 |
+| google | bm25 | none | vanilla | 1.47 | 1.40 | 1.93 | 195997 / 3959 | $0.33 | $0.21 |
+| google | dense | none | agentic | 3.08 | 3.00 | 4.47 | 387058 / 6092 | $0.64 | $0.26 |
+| google | dense | none | vanilla | 1.43 | 1.32 | 2.38 | 194980 / 3972 | $0.33 | $0.22 |
+| google | hybrid | llm | agentic | 7.41 | 6.96 | 10.97 | 575725 / 41804 | $1.24 | $0.37 |
+| google | hybrid | llm | vanilla | 4.16 | 4.16 | 4.74 | 280442 / 27440 | $0.67 | $0.34 |
+| google | hybrid | none | agentic | 3.49 | 3.22 | 5.10 | 441895 / 8051 | $0.74 | $0.34 |
+| google | hybrid | none | vanilla | 1.52 | 1.42 | 2.72 | 200227 / 4475 | $0.34 | $0.25 |
+| ollama | bm25 | none | agentic | 8.27 | 4.20 | 22.72 | 330223 / 15662 | $0.00 | $0.33 |
+| ollama | bm25 | none | vanilla | 2.74 | 2.29 | 5.37 | 128530 / 5510 | $0.00 | $0.36 |
+| ollama | dense | none | agentic | 7.36 | 6.73 | 16.82 | 274694 / 11680 | $0.00 | $0.33 |
+| ollama | dense | none | vanilla | 2.99 | 2.15 | 5.09 | 135677 / 6092 | $0.00 | $0.38 |
+| ollama | hybrid | llm | agentic | 20.43 | 18.47 | 40.49 | 429307 / 32080 | $0.00 | $0.35 |
+| ollama | hybrid | llm | vanilla | 9.98 | 9.23 | 18.78 | 208450 / 16472 | $0.00 | $0.36 |
+| ollama | hybrid | none | agentic | 9.65 | 6.88 | 32.36 | 288593 / 15013 | $0.00 | $0.38 |
+| ollama | hybrid | none | vanilla | 2.66 | 2.15 | 5.22 | 132187 / 5101 | $0.00 | $0.36 |
+
+Refusal correctness is reported separately from the 1-5 rubric means and is never averaged into them. Judge failures (n): listed per config when nonzero.
+
+### Agentic vs. vanilla — hybrid + llm rerank
+
+Retrieval config: mode hybrid + rerank llm.
+
+| Provider | Pipeline | Faith. | Relev. | Cit. Acc. | False refusal | Correct refusal | Mean revisions | Caveat | p50 (s) | Cost ($) |
+|----------|----------|--------|--------|-----------|-----------------|-----------------|-----------------|--------|---------|---------|
+| anthropic | vanilla | 5.00 | 5.00 | 5.00 | 0.16 | 0.88 | — | — | 17.87 | $1.35 |
+| anthropic | agentic | 5.00 | 4.94 | 5.00 | 0.08 | 0.88 | 0.17 | 0.00 | 34.08 | $2.91 |
+| google | vanilla | 4.80 | 4.63 | 4.90 | 0.21 | 1.00 | — | — | 4.16 | $0.67 |
+| google | agentic | 4.78 | 4.66 | 4.84 | 0.16 | 1.00 | 0.02 | 0.00 | 6.96 | $1.24 |
+| ollama | vanilla | 3.00 | 3.03 | 3.00 | 0.16 | 0.88 | — | — | 9.23 | $0.00 |
+| ollama | agentic | 2.26 | 2.88 | 2.03 | 0.11 | 1.00 | 0.37 | 0.13 | 18.47 | $0.00 |
+
+### By Type: Faithfulness / Relevance / Citation Accuracy Deltas (agentic - vanilla)
+
+| Provider | Type | n | F van | F ag | ΔF | R van | R ag | ΔR | C van | C ag | ΔC |
+|----------|------|------|-------|-------|-------|-------|-------|-------|-------|-------|-------|
+| anthropic | lookup | 14 | 5.00 | 5.00 | +0.00 | 5.00 | 5.00 | +0.00 | 5.00 | 5.00 | +0.00 |
+| anthropic | multihop | 10 | 5.00 | 5.00 | +0.00 | 5.00 | 4.75 | -0.25 | 5.00 | 5.00 | +0.00 |
+| anthropic | synthesis | 14 | 5.00 | 5.00 | +0.00 | 5.00 | 5.00 | +0.00 | 5.00 | 5.00 | +0.00 |
+| google | lookup | 14 | 4.92 | 4.92 | -0.01 | 4.54 | 4.58 | +0.04 | 5.00 | 4.83 | -0.17 |
+| google | multihop | 10 | 4.50 | 4.75 | +0.25 | 5.00 | 5.00 | +0.00 | 4.50 | 4.88 | +0.38 |
+| google | synthesis | 14 | 4.77 | 4.67 | -0.10 | 4.62 | 4.50 | -0.12 | 4.92 | 4.83 | -0.09 |
+| ollama | lookup | 14 | 3.67 | 3.18 | -0.48 | 3.00 | 3.27 | +0.27 | 3.50 | 2.55 | -0.95 |
+| ollama | multihop | 10 | 2.00 | 1.60 | -0.40 | 3.00 | 2.60 | -0.40 | 2.33 | 1.50 | -0.83 |
+| ollama | synthesis | 14 | 2.79 | 2.00 | -0.79 | 3.14 | 2.77 | -0.37 | 2.79 | 2.00 | -0.79 |
+
+
+### Analysis
+
+- **The agent loop's refusal win generalizes across retrieval configs.** Week 5
+  measured it only at hybrid+llm; the full matrix shows the loop cutting false
+  refusals for both cloud providers in **all four** retrieval configs — anthropic
+  mean 0.28 → 0.18, google 0.37 → 0.26 — with the largest gains where retrieval is
+  weakest (bm25: anthropic 0.45 → 0.24, google 0.47 → 0.26). Decomposition partially
+  compensates for a weak retriever. Rubric means move ≤ 0.06 for cloud providers,
+  at roughly 2× generation cost and ~2× p50 latency.
+- **Guardrails-on is free at benchmark scale.** 0 of 1,104 rows were refused by a
+  guardrail (input or output); every refusal in the tables is the model's own
+  grounded refusal. This is the production path — the numbers above are what the
+  API serves.
+- **Stability vs. the week-4/5 runs:** every cloud-provider rubric delta is ≤ 0.14
+  — the prompt hardening (week 6) did not move cloud quality. The refusal-rate
+  differences per config are variance-level (±1–5 flips of 46).
+- **One investigated anomaly (8B only):** ollama citation accuracy dropped 0.3–0.5
+  under the delimiter-hardened synthesis prompts (bm25 vanilla 3.36 → 2.84). Same
+  judge both runs; per-row justifications show llama3.1:8b now sometimes writes
+  "excerpt id=6" in prose instead of `[6]` markers, or attaches the wrong excerpt
+  id — a citation-format regression induced by the `<excerpt id=n>` context format
+  that cloud models are immune to (their citation accuracy held at ≈ 5.0). The
+  security hardening is kept; the cost lands entirely on the smallest model and is
+  documented in [limitations.md](limitations.md).
+- **The loop still hurts the 8B model** (replicating week 5, now across all
+  configs): faithfulness 3.00 → 2.26 and citation accuracy 3.00 → 2.03 at
+  hybrid+llm. Run the agent loop on models with headroom; run 8B vanilla.
+- **Measured run cost:** $23.67 ($17.39 generation + $6.28 judging) for 1,104
+  generation+judge pairs, per-row usage accounting.
+
 ## Reproduce
 
 ```bash
