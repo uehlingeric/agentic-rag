@@ -1,0 +1,13 @@
+# Gitleaks config: default rules plus an allowlist for documented placeholders.
+# Full-history scan is part of the release checklist (docs/plan/week-08.md).
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Documented placeholder tokens: CI compose smoke test and README quickstart example"
+regexTarget = "secret"
+regexes = [
+  '''^smoke-token$''',
+  '''^local-dev-token$''',
+]
