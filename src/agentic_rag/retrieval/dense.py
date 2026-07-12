@@ -111,7 +111,7 @@ class DenseIndex:
         }
         id_map_table = pa.table(id_map_dict)
         id_map_path = index_dir / "id_map.parquet"
-        pq.write_table(id_map_table, str(id_map_path))  # type: ignore[no-untyped-call]
+        pq.write_table(id_map_table, str(id_map_path))
 
         # Write manifest
         manifest = DenseManifest(
@@ -157,7 +157,7 @@ class DenseIndex:
         faiss_index = cast(faiss.IndexFlatIP, faiss.read_index(str(faiss_path)))
 
         # Load id_map
-        id_map = pq.read_table(str(id_map_path))  # type: ignore[no-untyped-call]
+        id_map = pq.read_table(str(id_map_path))
 
         # Load manifest
         with manifest_path.open(encoding="utf-8") as f:
