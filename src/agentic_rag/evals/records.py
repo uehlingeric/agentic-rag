@@ -72,6 +72,7 @@ class GenerationRecord:
     latency_s: dict[str, float]
     judge: JudgeScores | None
     agent: AgentMeta | None
+    guardrails: bool = False
 
 
 def usage_to_json(usage: Usage) -> dict[str, object]:
@@ -124,6 +125,7 @@ def record_to_json(record: GenerationRecord) -> dict[str, object]:
         "gen_usage": usage_to_json(record.gen_usage),
         "latency_s": record.latency_s,
         "judge": judge_to_json(record.judge) if record.judge is not None else None,
+        "guardrails": record.guardrails,
         "agent": {
             "plan_kind": record.agent.plan_kind,
             "sub_queries": record.agent.sub_queries,

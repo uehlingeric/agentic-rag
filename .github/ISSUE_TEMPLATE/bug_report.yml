@@ -1,0 +1,45 @@
+name: Bug report
+description: Something broke — a command failed, an answer pipeline errored, the quickstart didn't work
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you ran and what went wrong. Paste the exact command and output/traceback.
+      placeholder: |
+        $ uv run agentic-rag ask "..." --provider ollama
+        ...traceback...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Provider / path
+      options:
+        - ollama (local)
+        - anthropic (API or Bedrock)
+        - google (API or Vertex)
+        - openai
+        - docker compose stack
+        - stub / not provider-related
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Python version, how you installed (make install / docker), Ollama version if local.
+      placeholder: |
+        OS: Ubuntu 24.04
+        Python: 3.12.4
+        Install: make install
+        Ollama: 0.31.1
+    validations:
+      required: true

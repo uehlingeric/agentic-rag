@@ -29,6 +29,27 @@ jobs:
       - name: Test
         run: uv run pytest --cov --cov-report=term-missing
 
+  # Dependency + secret hygiene: audit the locked dependency set for known
+  # CVEs and scan the full git history for leaked credentials.
+  security-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: pip-audit (locked dependencies, all extras)
+        run: |
+          uv export --format requirements-txt --no-emit-project --all-extras > /tmp/req-audit.txt
+          uvx pip-audit -r /tmp/req-audit.txt --disable-pip
+      - name: gitleaks (full history)
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
+            | tar xz gitleaks
+          ./gitleaks git .
+
   # Image build + end-to-end smoke: stub provider over the committed fixture
   # corpus — exercises entrypoint, index build, auth, guardrails, and /ask
   # with no models and no network egress.
