@@ -91,9 +91,14 @@ _PHONE_PATTERN = re.compile(
 
 # EMAIL: Standard RFC-like pattern plus obfuscated forms.
 # Obfuscated forms: "user [at] example [dot] com", "(at)", "(dot)" variants.
+# ReDoS hardening (CodeQL py/polynomial-redos): the local part is possessive
+# ({1,64}+, RFC 5321 max) — safe because its charset is disjoint from every
+# first character the following alternation can match — and the domain part is
+# length-bounded so backtracking is O(1) per position. Scanned text is
+# attacker-controlled; unbounded backtracking here was a CPU-burn vector.
 _EMAIL_PATTERN = re.compile(
-    r"[A-Za-z0-9._%+\-]+(?:@|[\s]*\((?:at|@)\)[\s]*|[\s]*\[(?:at|@)\][\s]*)"
-    r"[A-Za-z0-9.\-]+(?:(?:\.|[\s]*\((?:dot|\.)\)[\s]*|[\s]*\[(?:dot|\.)\][\s]*))"
+    r"[A-Za-z0-9._%+\-]{1,64}+(?:@|[\s]*\((?:at|@)\)[\s]*|[\s]*\[(?:at|@)\][\s]*)"
+    r"[A-Za-z0-9.\-]{1,253}(?:(?:\.|[\s]*\((?:dot|\.)\)[\s]*|[\s]*\[(?:dot|\.)\][\s]*))"
     r"[A-Za-z]+",
     re.IGNORECASE,
 )
